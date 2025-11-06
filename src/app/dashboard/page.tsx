@@ -1,5 +1,6 @@
 "use client"
 import { useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Connection, SystemProgram, Transaction, PublicKey } from '@solana/web3.js'
 import useSWR from 'swr'
 import { apiFetch, getToken } from '@/lib/api'
@@ -13,6 +14,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
 import { Menu, LogOut, UploadCloud, Pencil, Save, X } from "lucide-react"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
+import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible"
 
 const TaskTypes = ['SUMMARIZATION', 'CAPTIONS', 'DATA_EXTRACTION'] as const
 
@@ -74,6 +76,7 @@ export default function DashboardPage() {
   const [queueRunning, setQueueRunning] = useState(false)
   const [viewLoading, setViewLoading] = useState(false)
   const [viewDetails, setViewDetails] = useState<any | null>(null)
+  const [openDetails, setOpenDetails] = useState<Record<string, boolean>>({})
   const [mdRenderer, setMdRenderer] = useState<any>(null)
   const [mdGfm, setMdGfm] = useState<any>(null)
   const [isEditingResult, setIsEditingResult] = useState(false)
@@ -101,6 +104,81 @@ export default function DashboardPage() {
       } catch {}
     })()
   }, [])
+
+  function tryParseJson(text?: string | null): any | null {
+    if (!text) return null
+    try { return JSON.parse(text) } catch { return null }
+  }
+
+  function Section({ title, children }: { title: string; children: ReactNode }) {
+    return (
+      <div className="mb-4">
+        <div className="font-semibold text-[#0f3d7a] mb-2">{title}</div>
+        <div className="text-sm text-foreground">{children}</div>
+      </div>
+    )
+  }
+
+  function renderJsonResult(obj: any) {
+    const comps: ReactNode[] = []
+    if (Array.isArray(obj?.main_points) && obj.main_points.length) {
+      comps.push(
+        <Section key="main_points" title="Main points">
+          <ul className="list-disc pl-5 space-y-1">
+            {obj.main_points.map((p: string, i: number) => <li key={i}>{p}</li>)}
+          </ul>
+        </Section>
+      )
+    }
+    if (Array.isArray(obj?.actionable_insights) && obj.actionable_insights.length) {
+      comps.push(
+        <Section key="actionable_insights" title="Actionable insights">
+          <ul className="list-disc pl-5 space-y-1">
+            {obj.actionable_insights.map((p: string, i: number) => <li key={i}>{p}</li>)}
+          </ul>
+        </Section>
+      )
+    }
+    if (Array.isArray(obj?.competitors) && obj.competitors.length) {
+      comps.push(
+        <Section key="competitors" title="Competitors">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {obj.competitors.map((c: any, i: number) => {
+              const name = c['Brand/Product'] || c.name || 'Competitor'
+              const kf = c['Key Features'] || c.features || ''
+              const mp = c['Market Presence'] || c.presence || ''
+              return (
+                <div key={i} className="rounded border bg-card p-3">
+                  <div className="font-medium">{name}</div>
+                  {kf && <div className="text-xs text-muted-foreground mt-1">{kf}</div>}
+                  {mp && <div className="text-xs mt-1"><Badge variant="secondary">{mp}</Badge></div>}
+                </div>
+              )
+            })}
+          </div>
+        </Section>
+      )
+    }
+    if (obj?.action_plan) {
+      comps.push(
+        <Section key="action_plan" title="Action plan">
+          <div className="whitespace-pre-wrap">{String(obj.action_plan)}</div>
+        </Section>
+      )
+    }
+    if (obj?.Summary || obj?.summary) {
+      comps.push(
+        <Section key="summary" title="Summary">
+          <div className="whitespace-pre-wrap">{String(obj.Summary || obj.summary)}</div>
+        </Section>
+      )
+    }
+    if (comps.length === 0) {
+      // fallback render whole JSON
+      comps.push(<pre key="json" className="whitespace-pre-wrap text-xs">{JSON.stringify(obj, null, 2)}</pre>)
+    }
+    return <div className="space-y-2">{comps}</div>
+  }
 
   function jsonToMarkdown(obj: any): string {
     let out: string[] = []
@@ -184,7 +262,7 @@ export default function DashboardPage() {
       }
       const rpc = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://api.devnet.solana.com'
       const connection = new Connection(rpc, 'confirmed')
-      const treasury = (process.env.PUBLIC_KEY || '').trim()
+      const treasury = ('aTdgbNCJnayztMCepbozgv6d8rdG146DVUSy3zLfmth' ).trim()
       if (!treasury) {
         setFormError('Treasury public key is not configured (set PUBLIC_KEY)')
         return
@@ -195,7 +273,12 @@ export default function DashboardPage() {
         setFormError('Phantom wallet not found. Please install Phantom and refresh.')
         return
       }
-      await provider.connect()
+      if (!provider.isConnected) {
+        try { await provider.connect() } catch (e) {
+          setFormError('Wallet connect was rejected. Please approve the connection in Phantom.')
+          return
+        }
+      }
       const from = new PublicKey(provider.publicKey?.toString())
       const to = new PublicKey(treasury)
       const lamports = Math.floor(amt * 1_000_000_000)
@@ -203,8 +286,20 @@ export default function DashboardPage() {
       const tx = new Transaction({ feePayer: from, recentBlockhash: blockhash })
       tx.add(SystemProgram.transfer({ fromPubkey: from, toPubkey: to, lamports }))
       setDepositing(true)
-      const signed = await provider.signAndSendTransaction(tx)
-      const signature = signed?.signature || signed
+      let signature: string | undefined
+      try {
+        const signed = await provider.signAndSendTransaction(tx)
+        signature = (signed as any)?.signature || (signed as any)
+      } catch (e:any) {
+        const msg = e?.message || String(e)
+        if (msg?.toLowerCase()?.includes('disconnected port')) {
+          // Likely Next.js Fast Refresh (HMR) caused the Phantom port to disconnect during the prompt
+          setFormError('Wallet interaction interrupted (dev Fast Refresh). Please retry, avoid saving files during the Phantom prompt, or run in production (npm run build && npm start).')
+          return
+        }
+        throw e
+      }
+      if (!signature) throw new Error('No signature returned from wallet')
       await connection.confirmTransaction(signature, 'confirmed')
       setDepositTx(signature)
       setFormSuccess(`Stake confirmed. Tx: ${signature}`)
@@ -326,11 +421,23 @@ export default function DashboardPage() {
         if (data?.inviteUrl) setDiscordInvite(data.inviteUrl)
       } catch {}
     })()
-    // Restore connection status from localStorage
-    const saved = localStorage.getItem('discordConnected')
-    if (saved === 'true') setDiscordConnected(true)
-    const savedChannel = localStorage.getItem('discordChannelId')
-    if (savedChannel) setDiscordChannelId(savedChannel)
+    // Load saved channel from DB
+    ;(async () => {
+      try {
+        const resp = await fetch('/api/settings/discord', { headers: { 'Authorization': `Bearer ${getToken()}` } })
+        const data = await resp.json()
+        if (data?.discordChannelId) {
+          setDiscordChannelId(data.discordChannelId)
+          setDiscordConnected(true)
+          // mirror to localStorage for quick UI restore, but DB is source of truth
+          localStorage.setItem('discordConnected', 'true')
+          localStorage.setItem('discordChannelId', data.discordChannelId)
+        } else {
+          setDiscordConnected(false)
+          localStorage.removeItem('discordConnected')
+        }
+      } catch {}
+    })()
   }, [authed])
 
   async function testDiscord() {
@@ -353,7 +460,13 @@ export default function DashboardPage() {
   async function saveDiscordChannel() {
     setSavingDiscord(true)
     try {
-      await fetch('/api/settings/discord', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${getToken()}` }, body: JSON.stringify({ channelId: discordChannelId }) })
+      const resp = await fetch('/api/settings/discord', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${getToken()}` }, body: JSON.stringify({ channelId: discordChannelId }) })
+      const data = await resp.json().catch(()=>null)
+      if (data?.discordChannelId) {
+        setDiscordConnected(true)
+        localStorage.setItem('discordConnected', 'true')
+        localStorage.setItem('discordChannelId', data.discordChannelId)
+      }
     } finally {
       setSavingDiscord(false)
     }
@@ -569,6 +682,7 @@ export default function DashboardPage() {
                               </div>
                             </div>
                             <div className="flex gap-2">
+                              <Button variant="outline" onClick={()=>setOpenDetails(s=>({ ...s, [t.id]: !s[t.id] }))}>{openDetails[t.id]? 'Hide Details' : 'View Details'}</Button>
                               <Button variant="outline" onClick={()=>runAgent(t.id)} disabled={running===t.id}>{running===t.id? 'Running...' : 'Run Agent'}</Button>
                               <Button onClick={()=>generateChallenge(t)} disabled={!t.payments || t.payments.length===0}>Generate Challenge</Button>
                               {challenge[t.id]?.paymentRequestUrl && (
@@ -582,23 +696,39 @@ export default function DashboardPage() {
                               <Button variant="destructive" onClick={()=>deleteTask(t.id)} disabled={deletingId===t.id}>{deletingId===t.id? 'Deleting…' : 'Delete'}</Button>
                             </div>
                           </div>
-                          {t.resultText && (
-                            <div className="mt-3 rounded bg-[#f7fbff] p-3 text-sm text-[#0f3d7a]">
-                              {(() => {
-                                const MD = mdRenderer
-                                const gfm = mdGfm
-                                const md = resultToMarkdown(t.resultText)
-                                if (MD) {
-                                  const Comp = MD as any
-                                  return <Comp remarkPlugins={gfm ? [gfm] : []}>{md}</Comp>
-                                }
-                                return <pre className="whitespace-pre-wrap">{md}</pre>
-                              })()}
-                            </div>
-                          )}
-                          {challenge[t.id] && (
-                            <pre className="mt-3 whitespace-pre-wrap rounded bg-[#fff7f2] p-3 text-xs text-[#7a3d0f]">{JSON.stringify(challenge[t.id], null, 2)}</pre>
-                          )}
+                          <Collapsible open={!!openDetails[t.id]}>
+                            <CollapsibleContent>
+                              <div className="mt-3 space-y-3">
+                                {t.sourceUrl && (
+                                  <div className="text-xs text-muted-foreground">Source URL: <a className="underline" href={t.sourceUrl} target="_blank" rel="noreferrer">{t.sourceUrl}</a></div>
+                                )}
+                                {t.inputText && (
+                                  <div className="text-xs text-muted-foreground">Input: {t.inputText.slice(0, 240)}{t.inputText.length>240?'…':''}</div>
+                                )}
+                                {t.resultText && (
+                                  <div className="rounded bg-[#f7fbff] p-3 text-sm text-[#0f3d7a] overflow-x-auto">
+                                    {(() => {
+                                      const parsed = tryParseJson(t.resultText)
+                                      if (parsed) return renderJsonResult(parsed)
+                                      const MD = mdRenderer
+                                      const gfm = mdGfm
+                                      const md = resultToMarkdown(t.resultText)
+                                      if (MD) {
+                                        const Comp = MD as any
+                                        return <Comp remarkPlugins={gfm ? [gfm] : []}>{md}</Comp>
+                                      }
+                                      return <pre className="whitespace-pre-wrap">{md}</pre>
+                                    })()}
+                                  </div>
+                                )}
+                                {challenge[t.id] && (
+                                  <div className="overflow-x-auto">
+                                    <pre className="whitespace-pre rounded bg-[#fff7f2] p-3 text-xs text-[#7a3d0f]">{JSON.stringify(challenge[t.id], null, 2)}</pre>
+                                  </div>
+                                )}
+                              </div>
+                            </CollapsibleContent>
+                          </Collapsible>
                         </CardContent>
                       </Card>
                     ))}
@@ -644,7 +774,7 @@ export default function DashboardPage() {
             <CardContent>
               {(() => {
                 const task = tasks.find(x => x.id === viewTaskId)
-                const md = resultToMarkdown(task?.resultText)
+                const parsed = tryParseJson(task?.resultText)
                 if (isEditingResult) {
                   return (
                     <div className="space-y-2">
@@ -653,8 +783,12 @@ export default function DashboardPage() {
                     </div>
                   )
                 }
+                if (parsed) {
+                  return renderJsonResult(parsed)
+                }
                 const MD = mdRenderer
                 const gfm = mdGfm
+                const md = resultToMarkdown(task?.resultText)
                 if (MD) {
                   const Comp = MD as any
                   return (

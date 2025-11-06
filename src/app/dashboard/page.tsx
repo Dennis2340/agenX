@@ -64,6 +64,16 @@ export default function DashboardPage() {
   const [discordTesting, setDiscordTesting] = useState<boolean>(false)
   const [discordChannelId, setDiscordChannelId] = useState<string>("")
   const [savingDiscord, setSavingDiscord] = useState<boolean>(false)
+  const [viewOpen, setViewOpen] = useState(false)
+  const [viewTaskId, setViewTaskId] = useState<string | null>(null)
+
+  function linkify(text: string) {
+    const urlRegex = /(https?:\/\/[^\s)]+)|(www\.[^\s)]+)/g
+    return text.replace(urlRegex, (match) => {
+      const url = match.startsWith('http') ? match : `https://${match}`
+      return `<a href="${url}" target="_blank" rel="noreferrer" class="underline text-[#0f3d7a]">${match}</a>`
+    })
+  }
 
   async function createTask(e: React.FormEvent) {
     e.preventDefault()
@@ -368,6 +378,9 @@ export default function DashboardPage() {
                           <div className="flex gap-2">
                             <Button variant="outline" onClick={()=>runAgent(t.id)} disabled={running===t.id}>{running===t.id? 'Running...' : 'Run Agent'}</Button>
                             <Button onClick={()=>generateChallenge(t)}>Generate Challenge</Button>
+                            {t.resultText && (
+                              <Button variant="secondary" onClick={()=>{ setViewTaskId(t.id); setViewOpen(true) }}>View Result</Button>
+                            )}
                           </div>
                         </div>
                         {t.resultText && (
@@ -390,6 +403,24 @@ export default function DashboardPage() {
           </Card>
         </main>
       </div>
+      <Sheet open={viewOpen} onOpenChange={setViewOpen}>
+        <SheetContent side="right" className="w-full sm:w-[700px] overflow-y-auto">
+          <Card>
+            <CardHeader>
+              <CardTitle>Result</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {(() => {
+                const task = tasks.find(x => x.id === viewTaskId)
+                const html = task?.resultText ? linkify(task.resultText) : ''
+                return (
+                  <div className="prose max-w-none whitespace-pre-wrap text-sm" dangerouslySetInnerHTML={{ __html: html }} />
+                )
+              })()}
+            </CardContent>
+          </Card>
+        </SheetContent>
+      </Sheet>
     </div>
   )
 }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '../../../../server/db'
 import { z } from 'zod'
 import { notifyDiscordForUser } from '@/server/notifier'
+import { fetchUrlText, askPerplexity, askTavily } from '@/server/tools/research'
 
 const schema = z.object({
   taskId: z.string(),
@@ -53,16 +54,55 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const { taskId } = schema.parse(body)
 
-    const task = await prisma.task.findUnique({ where: { id: taskId } })
+    const task = await prisma.task.findUnique({ where: { id: taskId }, include: { attachment: true } })
     if (!task) return NextResponse.json({ error: 'Task not found' }, { status: 404 })
 
     // Mark in progress and notify
     await prisma.task.update({ where: { id: taskId }, data: { status: 'IN_PROGRESS' } })
     if (task.createdById) await notifyDiscordForUser(task.createdById, `AgenX: Task ${taskId} in progress…`)
 
-    const prompt = buildPrompt(task)
-    const aiResult = await runWithOpenAI(prompt)
-    const content = (aiResult ?? '').toString().trim()
+    // Gather base text from attachment or URL or inputText
+    const attachmentText = task.attachment?.extractedText || null
+    const urlText = task.sourceUrl ? await fetchUrlText(task.sourceUrl) : null
+    const baseText = [task.inputText, attachmentText, urlText].filter(Boolean).join('\n\n').slice(0, 6000)
+
+    // Extract insights from baseText if available
+    let insights = ''
+    if (baseText) {
+      const extractPrompt = [
+        buildPrompt(task),
+        '',
+        'Given the following content, extract 5-10 key insights as bullet points:',
+        baseText,
+      ].join('\n')
+      insights = (await runWithOpenAI(extractPrompt)) || ''
+    }
+
+    // Research using Perplexity and Tavily
+    const researchQuery = insights || task.description || task.inputText || 'Perform a short market analysis based on the topic.'
+    const [px, tv] = await Promise.all([
+      askPerplexity(`Research and provide concise evidence-backed bullets for: ${researchQuery}`),
+      askTavily(`Research and provide concise bullets with top sources for: ${researchQuery}`),
+    ])
+
+    // Compose final result
+    const finalPrompt = [
+      buildPrompt(task),
+      '',
+      insights ? 'Insights extracted from document:' : 'No document insights available.',
+      insights || '(none)',
+      '',
+      'External research (Perplexity):',
+      px || '(none)',
+      '',
+      'External research (Tavily):',
+      tv || '(none)',
+      '',
+      'Produce a final consolidated output that follows the TaskType output rules. Include a short sources section at the end if available.'
+    ].join('\n')
+
+    const aiResult = await runWithOpenAI(finalPrompt)
+    const content = (aiResult ?? insights ?? px ?? tv ?? '').toString().trim()
 
     const succeeded = !!content
     const updated = await prisma.task.update({
@@ -74,7 +114,7 @@ export async function POST(req: NextRequest) {
       data: {
         taskId: taskId,
         tool: 'OPENAI',
-        input: { prompt },
+        input: { baseText: !!baseText, usedPerplexity: !!px, usedTavily: !!tv },
         output: { content },
         success: true,
       }

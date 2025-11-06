@@ -18,18 +18,22 @@ export async function GET(req: NextRequest) {
     if (header !== secret && qp !== secret) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // Find a small batch of tasks that are ready to run
+  // Find a small batch of tasks that are ready to run (including freshly posted)
   const tasks = await prisma.task.findMany({
-    where: { status: { in: ['ASSIGNED', 'IN_PROGRESS'] } },
+    where: { status: { in: ['POSTED', 'ASSIGNED', 'IN_PROGRESS'] } },
     orderBy: { updatedAt: 'asc' },
     take: 3,
-    select: { id: true }
+    select: { id: true, status: true }
   })
 
   const baseUrl = process.env.PUBLIC_BASE_URL || process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000'
 
   for (const t of tasks) {
     try {
+      // Pre-mark POSTED tasks as ASSIGNED to avoid duplicate dispatches
+      if (t.status === 'POSTED') {
+        await prisma.task.update({ where: { id: t.id }, data: { status: 'ASSIGNED' } })
+      }
       await postAgentRun(baseUrl, t.id)
     } catch {}
   }

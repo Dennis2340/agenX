@@ -1,0 +1,276 @@
+// Prisma schema for AgenX MVP
+// DB: default to PostgreSQL via DATABASE_URL. Adjust provider if needed (e.g., sqlite).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ===== Enums =====
+
+enum Role {
+  USER
+  AGENT
+  ADMIN
+}
+
+enum AgentStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum TaskType {
+  SUMMARIZATION
+  CAPTIONS
+  DATA_EXTRACTION
+}
+
+enum TaskStatus {
+  POSTED
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  PAID
+  FAILED
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+enum ToolName {
+  OPENAI
+  PERPLEXITY
+  TAVILY
+  DOC_PARSER
+  GOOGLE_DRIVE
+  DISCORD
+  EMAIL
+  X402
+}
+
+enum DocType {
+  PDF
+  CSV
+  WEBPAGE
+  TEXT
+}
+
+enum StorageProvider {
+  WEB
+  DRIVE
+  IPFS
+}
+
+enum IntegrationProvider {
+  DISCORD
+  GOOGLE_DRIVE
+  EMAIL
+}
+
+enum NotificationType {
+  DISCORD
+  EMAIL
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+// ===== Models =====
+
+model User {
+  id                 String               @id @default(cuid())
+  email              String               @unique
+  name               String?
+  role               Role                 @default(USER)
+  walletAddress      String?
+  passwordHash       String?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  // Relations
+  agents             Agent[]
+  tasksCreated       Task[]               @relation("TasksCreated")
+  paymentsMade       Payment[]            @relation("UserPayments")
+  integrationAccounts IntegrationAccount[]
+  notifications      Notification[]
+  documents          Document[]
+  userSetting        UserSetting?
+}
+
+model Agent {
+  id           String      @id @default(cuid())
+  userId       String      @unique
+  user         User        @relation(fields: [userId], references: [id])
+  status       AgentStatus @default(ACTIVE)
+  reputation   Float       @default(0)
+  earnings     Decimal     @default(0)
+  skills       String?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  // Relations
+  assignedTasks Task[]
+  toolRuns      ToolRun[]
+  payments      Payment[]
+}
+
+model Task {
+  id                String      @id @default(cuid())
+  type              TaskType
+  status            TaskStatus  @default(POSTED)
+  title             String?
+  description       String?
+
+  // Input sources
+  sourceUrl         String?
+  inputText         String?
+  attachmentId      String?
+  attachment        Document?   @relation("TaskAttachment", fields: [attachmentId], references: [id])
+
+  // Payout
+  payoutAmount      Decimal
+  payoutCurrency    String      @default("SOL")
+
+  // Ownership & assignment
+  createdById       String
+  createdBy         User        @relation("TasksCreated", fields: [createdById], references: [id])
+  assignedAgentId   String?
+  assignedAgent     Agent?      @relation(fields: [assignedAgentId], references: [id])
+
+  // Results
+  resultText        String?
+  resultDriveFileId String?
+  
+  // OpenAI Assistants tracking
+  assistantThreadId String?
+  assistantRunId    String?
+  saveToDrive       Boolean     @default(false)
+
+  // Meta
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  // Relations
+  toolRuns          ToolRun[]
+  payments          Payment[]
+
+  @@index([status])
+  @@index([assignedAgentId])
+}
+
+model Payment {
+  id             String        @id @default(cuid())
+  taskId         String
+  task           Task          @relation(fields: [taskId], references: [id])
+
+  payerUserId    String
+  payer          User          @relation("UserPayments", fields: [payerUserId], references: [id])
+
+  payeeAgentId   String?
+  payeeAgent     Agent?        @relation(fields: [payeeAgentId], references: [id])
+
+  amount         Decimal
+  currency       String        @default("SOL")
+  network        String        @default("devnet")
+  mint           String        @default("SOL")
+  payerWalletAddress String?
+  payeeWalletAddress String?
+  status         PaymentStatus @default(PENDING)
+  txHash         String?
+  paymentRequestUrl String?
+  challengeId    String?
+  callbackUrl    String?
+  settlementSig  String?
+  settledAt      DateTime?
+  x402SessionId  String?
+  createdAt      DateTime      @default(now())
+
+  @@index([taskId])
+  @@index([status])
+}
+
+model ToolRun {
+  id         String   @id @default(cuid())
+  taskId     String
+  task       Task     @relation(fields: [taskId], references: [id])
+
+  agentId    String?
+  agent      Agent?   @relation(fields: [agentId], references: [id])
+
+  tool       ToolName
+  input      Json?
+  output     Json?
+  success    Boolean  @default(true)
+  startedAt  DateTime @default(now())
+  finishedAt DateTime?
+
+  @@index([taskId])
+  @@index([agentId])
+}
+
+model IntegrationAccount {
+  id                 String               @id @default(cuid())
+  userId             String
+  user               User                 @relation(fields: [userId], references: [id])
+  provider           IntegrationProvider
+  providerUserId     String               @unique
+  accessToken        String?
+  refreshToken       String?
+  scopes             String?
+  meta               Json?
+  expiresAt          DateTime?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  @@index([userId, provider])
+}
+
+model Document {
+  id            String          @id @default(cuid())
+  userId        String
+  user          User            @relation(fields: [userId], references: [id])
+  type          DocType
+  storage       StorageProvider @default(WEB)
+  url           String?
+  driveFileId   String?
+  extractedText String?
+  parsedData    Json?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  
+  // Back-relation for Task.attachment
+  attachedTasks  Task[]         @relation("TaskAttachment")
+}
+
+model Notification {
+  id          String             @id @default(cuid())
+  userId      String?
+  user        User?              @relation(fields: [userId], references: [id])
+  type        NotificationType
+  destination String
+  payload     Json?
+  status      NotificationStatus @default(PENDING)
+  createdAt   DateTime           @default(now())
+
+  @@index([userId])
+}
+
+model UserSetting {
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  user              User     @relation(fields: [userId], references: [id])
+  discordChannelId  String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}

@@ -21,7 +21,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   return NextResponse.json({ task })
 }
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = getAuthUser(req)
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -30,7 +30,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     const data = updateSchema.parse(body)
 
     const updated = await prisma.task.update({
-      where: { id: params.id },
+      where: { id: (await params).id },
       data: {
         status: data.status,
         assignedAgentId: data.assignedAgentId ?? undefined,

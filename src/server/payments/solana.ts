@@ -8,6 +8,20 @@ export function getConnection() {
 }
 
 export function loadTreasuryKeypair(): Keypair {
+  // 1) Direct JSON array in env
+  const json = process.env.PAYER_KEYPAIR_JSON
+  if (json) {
+    const arr = JSON.parse(json) as number[]
+    return Keypair.fromSecretKey(Uint8Array.from(arr))
+  }
+  // 2) Base64 of the JSON array
+  const b64 = process.env.PAYER_KEYPAIR_B64
+  if (b64) {
+    const raw = Buffer.from(b64, 'base64').toString('utf8')
+    const arr = JSON.parse(raw) as number[]
+    return Keypair.fromSecretKey(Uint8Array.from(arr))
+  }
+  // 3) Fallback to file path (local dev)
   const p = process.env.PAYER_KEYPAIR_PATH || './secrets/agenx-wallet.json'
   const abs = path.isAbsolute(p) ? p : path.join(process.cwd(), p)
   const raw = fs.readFileSync(abs, 'utf-8')

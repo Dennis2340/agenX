@@ -66,7 +66,31 @@ export async function POST(req: NextRequest) {
     // Gather base text from attachment or URL or inputText
     const paidFetch = getPaidFetcher()
     const attachmentText = task.attachment?.extractedText || null
-    const urlText = task.sourceUrl ? await fetchUrlText(task.sourceUrl, paidFetch) : null
+    let urlText: string | null = null
+    if (task.sourceUrl) {
+      try {
+        urlText = await fetchUrlText(task.sourceUrl, paidFetch)
+        await prisma.toolRun.create({
+          data: {
+            taskId: taskId,
+            tool: 'DOC_PARSER',
+            input: { url: task.sourceUrl },
+            output: { ok: !!urlText, length: urlText?.length || 0 },
+            success: true,
+          }
+        })
+      } catch (e) {
+        await prisma.toolRun.create({
+          data: {
+            taskId: taskId,
+            tool: 'DOC_PARSER',
+            input: { url: task.sourceUrl },
+            output: { ok: false },
+            success: false,
+          }
+        }).catch(()=>null)
+      }
+    }
     const baseText = [task.inputText, attachmentText, urlText].filter(Boolean).join('\n\n').slice(0, 6000)
 
     // Extract insights from baseText if available
@@ -84,8 +108,60 @@ export async function POST(req: NextRequest) {
     // Research using Perplexity and Tavily
     const researchQuery = insights || task.description || task.inputText || 'Perform a short market analysis based on the topic.'
     const [px, tv] = await Promise.all([
-      askPerplexity(`Research and provide concise evidence-backed bullets for: ${researchQuery}`, paidFetch),
-      askTavily(`Research and provide concise bullets with top sources for: ${researchQuery}`, paidFetch),
+      (async () => {
+        try {
+          const q = `Research and provide concise evidence-backed bullets for: ${researchQuery}`
+          const r = await askPerplexity(q, paidFetch)
+          await prisma.toolRun.create({
+            data: {
+              taskId: taskId,
+              tool: 'PERPLEXITY',
+              input: { query: q },
+              output: { ok: !!r },
+              success: !!r,
+            }
+          })
+          return r
+        } catch (e) {
+          await prisma.toolRun.create({
+            data: {
+              taskId: taskId,
+              tool: 'PERPLEXITY',
+              input: { query: researchQuery },
+              output: { ok: false },
+              success: false,
+            }
+          }).catch(()=>null)
+          return null
+        }
+      })(),
+      (async () => {
+        try {
+          const q = `Research and provide concise bullets with top sources for: ${researchQuery}`
+          const r = await askTavily(q, paidFetch)
+          await prisma.toolRun.create({
+            data: {
+              taskId: taskId,
+              tool: 'TAVILY',
+              input: { query: q },
+              output: { ok: !!r },
+              success: !!r,
+            }
+          })
+          return r
+        } catch (e) {
+          await prisma.toolRun.create({
+            data: {
+              taskId: taskId,
+              tool: 'TAVILY',
+              input: { query: researchQuery },
+              output: { ok: false },
+              success: false,
+            }
+          }).catch(()=>null)
+          return null
+        }
+      })(),
     ])
 
     // Compose final result

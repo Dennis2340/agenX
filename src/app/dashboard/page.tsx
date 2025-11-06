@@ -67,6 +67,8 @@ export default function DashboardPage() {
   const [viewOpen, setViewOpen] = useState(false)
   const [viewTaskId, setViewTaskId] = useState<string | null>(null)
   const [queueRunning, setQueueRunning] = useState(false)
+  const [viewLoading, setViewLoading] = useState(false)
+  const [viewDetails, setViewDetails] = useState<any | null>(null)
 
   function linkify(text: string) {
     const urlRegex = /(https?:\/\/[^\s)]+)|(www\.[^\s)]+)/g
@@ -75,6 +77,21 @@ export default function DashboardPage() {
       return `<a href="${url}" target="_blank" rel="noreferrer" class="underline text-[#0f3d7a]">${match}</a>`
     })
   }
+
+  useEffect(() => {
+    ;(async () => {
+      if (!viewOpen || !viewTaskId) return
+      setViewLoading(true)
+      setViewDetails(null)
+      try {
+        const data = await apiFetch(`/api/tasks/${viewTaskId}`)
+        setViewDetails(data?.task || null)
+      } catch {}
+      finally {
+        setViewLoading(false)
+      }
+    })()
+  }, [viewOpen, viewTaskId])
 
   async function runQueue() {
     setQueueRunning(true)
@@ -434,10 +451,38 @@ export default function DashboardPage() {
                   <div className="prose max-w-none whitespace-pre-wrap text-sm" dangerouslySetInnerHTML={{ __html: html }} />
                 )
               })()}
+              <div className="mt-6">
+                <div className="font-semibold mb-2">Research Spend</div>
+                {viewLoading && (
+                  <div className="text-xs text-muted-foreground">Loading…</div>
+                )}
+                {!viewLoading && (!viewDetails?.toolRuns || viewDetails.toolRuns.length===0) && (
+                  <div className="text-xs text-muted-foreground">No research entries.</div>
+                )}
+                {!viewLoading && viewDetails?.toolRuns && viewDetails.toolRuns.length>0 && (
+                  <div className="space-y-2">
+                    {viewDetails.toolRuns
+                      .filter((tr: any)=> ['PERPLEXITY','TAVILY','DOC_PARSER'].includes(tr.tool))
+                      .map((tr: any, idx: number)=> (
+                        <div key={idx} className="rounded border p-2 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-medium">{tr.tool}</span>
+                            <Badge variant={tr.success? 'secondary':'destructive'}>{tr.success? 'OK':'FAIL'}</Badge>
+                          </div>
+                          {tr.input?.url && (
+                            <div className="mt-1 truncate">URL: <a className="underline" href={tr.input.url} target="_blank" rel="noreferrer">{tr.input.url}</a></div>
+                          )}
+                          {tr.input?.query && (
+                            <div className="mt-1 truncate">Query: {tr.input.query}</div>
+                          )}
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
             </CardContent>
           </Card>
         </SheetContent>
       </Sheet>
     </div>
-  )
-}
+  )}

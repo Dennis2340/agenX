@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/cron/agent-tick",
-      "schedule": "*/10 * * * *"
+      "schedule": "*/1 * * * *"
     }
   ]
 }

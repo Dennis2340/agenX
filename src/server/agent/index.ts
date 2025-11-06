@@ -10,17 +10,19 @@ export function makeTools(taskId: string) {
   const fetchUrlText = tool({
     name: 'fetch_url_text',
     description: 'Fetch a URL and extract readable text content for grounding.',
-    parameters: z.object({ url: z.string().url() }),
+    parameters: z.object({ url: z.string().min(1).optional() }),
     execute: async ({ url }) => {
       try {
+        if (!url || !/^https?:\/\//i.test(url)) {
+          await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url: url || null }, output: { ok: false, error: 'No valid URL provided' }, success: false } }).catch(()=>null)
+          return { ok: false, error: 'No valid URL provided' }
+        }
         const text = await fetchUrlTextRaw(url, paidFetch)
-        await prisma.toolRun.create({
-          data: { taskId, tool: 'DOC_PARSER', input: { url }, output: { ok: !!text, length: text?.length || 0 }, success: !!text }
-        }).catch(()=>null)
+        await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url }, output: { ok: !!text, length: text?.length || 0 }, success: !!text } }).catch(()=>null)
         return { ok: !!text, text: text || '' }
       } catch (e:any) {
         await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url }, output: { ok: false, error: e?.message || String(e) }, success: false } }).catch(()=>null)
-        throw e
+        return { ok: false, error: e?.message || 'failed' }
       }
     }
   })
@@ -36,7 +38,7 @@ export function makeTools(taskId: string) {
         return { ok: !!out, text: out || '' }
       } catch (e:any) {
         await prisma.toolRun.create({ data: { taskId, tool: 'PERPLEXITY', input: { query }, output: { ok: false, error: e?.message || String(e) }, success: false } }).catch(()=>null)
-        throw e
+        return { ok: false, error: e?.message || 'failed' }
       }
     }
   })
@@ -52,7 +54,7 @@ export function makeTools(taskId: string) {
         return { ok: !!out, text: out || '' }
       } catch (e:any) {
         await prisma.toolRun.create({ data: { taskId, tool: 'TAVILY', input: { query }, output: { ok: false, error: e?.message || String(e) }, success: false } }).catch(()=>null)
-        throw e
+        return { ok: false, error: e?.message || 'failed' }
       }
     }
   })

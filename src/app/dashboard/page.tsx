@@ -66,6 +66,7 @@ export default function DashboardPage() {
   const [savingDiscord, setSavingDiscord] = useState<boolean>(false)
   const [viewOpen, setViewOpen] = useState(false)
   const [viewTaskId, setViewTaskId] = useState<string | null>(null)
+  const [queueRunning, setQueueRunning] = useState(false)
 
   function linkify(text: string) {
     const urlRegex = /(https?:\/\/[^\s)]+)|(www\.[^\s)]+)/g
@@ -73,6 +74,16 @@ export default function DashboardPage() {
       const url = match.startsWith('http') ? match : `https://${match}`
       return `<a href="${url}" target="_blank" rel="noreferrer" class="underline text-[#0f3d7a]">${match}</a>`
     })
+  }
+
+  async function runQueue() {
+    setQueueRunning(true)
+    try {
+      const url = '/api/cron/agent-tick'
+      await fetch(url)
+    } finally {
+      setQueueRunning(false)
+    }
   }
 
   async function createTask(e: React.FormEvent) {
@@ -262,6 +273,7 @@ export default function DashboardPage() {
                 </SheetContent>
               </Sheet>
 
+              <Button variant="outline" size="sm" onClick={runQueue} disabled={queueRunning}>{queueRunning ? 'Queue…' : 'Run Queue'}</Button>
               <Sheet open={quickOpen} onOpenChange={setQuickOpen}>
                 <SheetTrigger asChild>
                   <Button disabled={!discordConnected || !discordChannelId} title={!discordConnected ? 'Connect Discord first' : (!discordChannelId ? 'Enter Channel ID' : undefined)}>New Task</Button>
@@ -364,34 +376,39 @@ export default function DashboardPage() {
                     .filter(t => statusFilter==='ALL' || t.status===statusFilter)
                     .filter(t => typeFilter==='ALL' || t.type===typeFilter)
                     .map(t => (
-                    <Card key={t.id}>
-                      <CardContent className="p-4">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className="font-semibold text-[#0f3d7a]">{t.title || t.type}</div>
-                            <div className="text-sm text-muted-foreground">{t.description}</div>
-                            <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                              <span>Payout: {t.payoutAmount} {t.payoutCurrency}</span>
-                              <Badge variant="secondary">{t.status}</Badge>
+                      <Card key={t.id}>
+                        <CardContent className="p-4">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <div className="font-semibold text-[#0f3d7a]">{t.title || t.type}</div>
+                              <div className="text-sm text-muted-foreground">{t.description}</div>
+                              <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                                <span>Payout: {t.payoutAmount} {t.payoutCurrency}</span>
+                                <Badge variant="secondary">{t.status}</Badge>
+                              </div>
+                            </div>
+                            <div className="flex gap-2">
+                              <Button variant="outline" onClick={()=>runAgent(t.id)} disabled={running===t.id}>{running===t.id? 'Running...' : 'Run Agent'}</Button>
+                              <Button onClick={()=>generateChallenge(t)} disabled={!t.payments || t.payments.length===0}>Generate Challenge</Button>
+                              {challenge[t.id]?.paymentRequestUrl && (
+                                <Button asChild>
+                                  <a href={challenge[t.id].paymentRequestUrl} target="_blank" rel="noreferrer">Pay Now</a>
+                                </Button>
+                              )}
+                              {t.resultText && (
+                                <Button variant="secondary" onClick={()=>{ setViewTaskId(t.id); setViewOpen(true) }}>View Result</Button>
+                              )}
                             </div>
                           </div>
-                          <div className="flex gap-2">
-                            <Button variant="outline" onClick={()=>runAgent(t.id)} disabled={running===t.id}>{running===t.id? 'Running...' : 'Run Agent'}</Button>
-                            <Button onClick={()=>generateChallenge(t)}>Generate Challenge</Button>
-                            {t.resultText && (
-                              <Button variant="secondary" onClick={()=>{ setViewTaskId(t.id); setViewOpen(true) }}>View Result</Button>
-                            )}
-                          </div>
-                        </div>
-                        {t.resultText && (
-                          <pre className="mt-3 whitespace-pre-wrap rounded bg-[#f7fbff] p-3 text-sm text-[#0f3d7a]">{t.resultText}</pre>
-                        )}
-                        {challenge[t.id] && (
-                          <pre className="mt-3 whitespace-pre-wrap rounded bg-[#fff7f2] p-3 text-xs text-[#7a3d0f]">{JSON.stringify(challenge[t.id], null, 2)}</pre>
-                        )}
-                      </CardContent>
-                    </Card>
-                  ))}
+                          {t.resultText && (
+                            <pre className="mt-3 whitespace-pre-wrap rounded bg-[#f7fbff] p-3 text-sm text-[#0f3d7a]">{t.resultText}</pre>
+                          )}
+                          {challenge[t.id] && (
+                            <pre className="mt-3 whitespace-pre-wrap rounded bg-[#fff7f2] p-3 text-xs text-[#7a3d0f]">{JSON.stringify(challenge[t.id], null, 2)}</pre>
+                          )}
+                        </CardContent>
+                      </Card>
+                    ))}
                   {tasks.length === 0 && (
                     <Card>
                       <CardContent className="p-6 text-sm text-muted-foreground">No tasks yet. Create your first task.</CardContent>

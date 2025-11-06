@@ -3,7 +3,8 @@ import { prisma } from '../../../../server/db'
 import { z } from 'zod'
 import { notifyDiscordForUser } from '@/server/notifier'
 import { fetchUrlText, askPerplexity, askTavily } from '@/server/tools/research'
-import { transferSol } from '@/server/payments/solana'
+import { transferSol, usdToSol } from '@/server/payments/solana'
+import { getPaidFetcher } from '@/server/payments/x402'
 
 const schema = z.object({
   taskId: z.string(),
@@ -63,8 +64,9 @@ export async function POST(req: NextRequest) {
     if (task.createdById) await notifyDiscordForUser(task.createdById, `AgenX: Task ${taskId} in progress…`)
 
     // Gather base text from attachment or URL or inputText
+    const paidFetch = getPaidFetcher()
     const attachmentText = task.attachment?.extractedText || null
-    const urlText = task.sourceUrl ? await fetchUrlText(task.sourceUrl) : null
+    const urlText = task.sourceUrl ? await fetchUrlText(task.sourceUrl, paidFetch) : null
     const baseText = [task.inputText, attachmentText, urlText].filter(Boolean).join('\n\n').slice(0, 6000)
 
     // Extract insights from baseText if available
@@ -82,8 +84,8 @@ export async function POST(req: NextRequest) {
     // Research using Perplexity and Tavily
     const researchQuery = insights || task.description || task.inputText || 'Perform a short market analysis based on the topic.'
     const [px, tv] = await Promise.all([
-      askPerplexity(`Research and provide concise evidence-backed bullets for: ${researchQuery}`),
-      askTavily(`Research and provide concise bullets with top sources for: ${researchQuery}`),
+      askPerplexity(`Research and provide concise evidence-backed bullets for: ${researchQuery}`, paidFetch),
+      askTavily(`Research and provide concise bullets with top sources for: ${researchQuery}`, paidFetch),
     ])
 
     // Compose final result
@@ -127,7 +129,12 @@ export async function POST(req: NextRequest) {
         // Autonomous payout: transfer a small SOL amount from treasury to agent wallet (demo)
         try {
           const recipient = process.env.AGENT_PUBLIC_KEY || ''
-          const amountSol = Number(process.env.PAYOUT_SOL || '0.01')
+          let amountSol = Number(process.env.PAYOUT_SOL || '0')
+          const payoutUsd = Number(process.env.PAYOUT_USD || '0')
+          if (!amountSol && payoutUsd > 0) {
+            const conv = await usdToSol(payoutUsd)
+            amountSol = conv ? Math.max(conv, 0.000001) : 0
+          }
           if (recipient && amountSol > 0) {
             await notifyDiscordForUser(task.createdById, `AgenX: Initiating payment of ${amountSol} SOL to agent…`)
             const sig = await transferSol(recipient, amountSol)
@@ -150,7 +157,7 @@ export async function POST(req: NextRequest) {
             data: {
               taskId: taskId,
               payerUserId: task.createdById,
-              amount: (process.env.PAYOUT_SOL || '0.01'),
+              amount: (process.env.PAYOUT_SOL || process.env.PAYOUT_USD || '0'),
               currency: 'SOL',
               network: process.env.SOLANA_NETWORK || 'devnet',
               status: 'FAILED',

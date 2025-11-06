@@ -28,3 +28,21 @@ export async function transferSol(recipient: string, amountSol: number): Promise
   const sig = await sendAndConfirmTransaction(conn, tx, [payer], { commitment: 'confirmed' })
   return sig
 }
+
+export async function getSolPriceUsd(): Promise<number | null> {
+  try {
+    const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd')
+    if (!res.ok) return null
+    const data = await res.json().catch(()=>null)
+    const price = data?.solana?.usd
+    return typeof price === 'number' ? price : null
+  } catch {
+    return null
+  }
+}
+
+export async function usdToSol(usd: number): Promise<number | null> {
+  const price = await getSolPriceUsd()
+  if (!price || price <= 0) return null
+  return usd / price
+}

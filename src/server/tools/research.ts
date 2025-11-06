@@ -1,8 +1,8 @@
 const TEXT_MAX = 6000
 
-export async function fetchUrlText(url: string): Promise<string | null> {
+export async function fetchUrlText(url: string, fetchImpl: typeof fetch = fetch): Promise<string | null> {
   try {
-    const res = await fetch(url)
+    const res = await fetchImpl(url)
     if (!res.ok) return null
     const html = await res.text()
     const text = html
@@ -17,11 +17,11 @@ export async function fetchUrlText(url: string): Promise<string | null> {
   }
 }
 
-export async function askPerplexity(prompt: string): Promise<string | null> {
+export async function askPerplexity(prompt: string, fetchImpl: typeof fetch = fetch): Promise<string | null> {
   const key = process.env.PERPLEXITY_API_KEY
   if (!key) return null
   try {
-    const res = await fetch('https://api.perplexity.ai/chat/completions', {
+    const res = await fetchImpl('https://api.perplexity.ai/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${key}`,
@@ -45,11 +45,11 @@ export async function askPerplexity(prompt: string): Promise<string | null> {
   }
 }
 
-export async function askTavily(prompt: string): Promise<string | null> {
+export async function askTavily(prompt: string, fetchImpl: typeof fetch = fetch): Promise<string | null> {
   const key = process.env.TAVILY_API_KEY
   if (!key) return null
   try {
-    const res = await fetch('https://api.tavily.com/search', {
+    const res = await fetchImpl('https://api.tavily.com/search', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

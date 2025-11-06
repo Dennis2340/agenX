@@ -43,6 +43,8 @@ export async function POST(req: NextRequest) {
     const prompt: string | undefined = body.prompt?.toString()
     const attachmentId: string | undefined = body.attachmentId?.toString()
     const saveToDrive: boolean = !!body.saveToDrive
+    const depositTxHash: string | undefined = body.depositTxHash?.toString()
+    const depositAmountSol: string | undefined = body.depositAmountSol?.toString()
 
     if (!prompt && !attachmentId) {
       return NextResponse.json({ error: 'Provide a prompt or an attachment' }, { status: 400 })
@@ -72,6 +74,21 @@ export async function POST(req: NextRequest) {
         status: true,
       },
     })
+
+    // Record the user's stake deposit as a Payment row for visibility
+    if (depositTxHash && depositAmountSol) {
+      await prisma.payment.create({
+        data: {
+          taskId: created.id,
+          payerUserId: user.id,
+          amount: depositAmountSol,
+          currency: 'SOL',
+          network: process.env.SOLANA_NETWORK || 'devnet',
+          status: 'SUCCESS',
+          txHash: depositTxHash,
+        }
+      }).catch(()=>null)
+    }
 
     return NextResponse.json({ task: created, inferred: { type, tools } })
   } catch (e: any) {

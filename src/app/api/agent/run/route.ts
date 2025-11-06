@@ -27,6 +27,12 @@ function buildPrompt(task: any) {
   return lines.join('\n')
 }
 
+function shortLabel(text: string, max = 60) {
+  const t = (text || '').trim()
+  if (t.length <= max) return t
+  return t.slice(0, max) + '…'
+}
+
 async function runWithOpenAI(prompt: string) {
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) return null
@@ -58,10 +64,13 @@ export async function POST(req: NextRequest) {
 
     const task = await prisma.task.findUnique({ where: { id: taskId }, include: { attachment: true } })
     if (!task) return NextResponse.json({ error: 'Task not found' }, { status: 404 })
+    const labelFull = (task as any).title || task.description || task.inputText || `Task ${taskId}`
+    const label = shortLabel(labelFull)
+    console.log('[agent/run] start', { taskId, label })
 
     // Mark in progress and notify
     await prisma.task.update({ where: { id: taskId }, data: { status: 'IN_PROGRESS' } })
-    if (task.createdById) await notifyDiscordForUser(task.createdById, `AgenX: Task ${taskId} in progress…`)
+    if (task.createdById) await notifyDiscordForUser(task.createdById, `AgenX: "${label}" in progress…`)
 
     // Gather base text from attachment or URL or inputText
     const paidFetch = getPaidFetcher()
@@ -164,6 +173,37 @@ export async function POST(req: NextRequest) {
       })(),
     ])
 
+    // Real x402 demo call to a paywalled endpoint (for showcase)
+    try {
+      const demoRes = await paidFetch('https://triton.api.corbits.dev', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getBlockHeight' }),
+      })
+      const ok = demoRes.ok
+      console.log('[agent/run] x402 demo response', { status: demoRes.status, ok })
+      await prisma.toolRun.create({
+        data: {
+          taskId: taskId,
+          tool: 'DOC_PARSER',
+          input: { url: 'https://triton.api.corbits.dev', method: 'POST', rpc: 'getBlockHeight', tag: 'x402_demo' },
+          output: { status: demoRes.status, ok },
+          success: ok,
+        }
+      })
+    } catch (e) {
+      console.error('[agent/run] x402 demo error', { error: (e as any)?.message || String(e) })
+      await prisma.toolRun.create({
+        data: {
+          taskId: taskId,
+          tool: 'DOC_PARSER',
+          input: { url: 'https://triton.api.corbits.dev', method: 'POST', rpc: 'getBlockHeight', tag: 'x402_demo' },
+          output: { ok: false },
+          success: false,
+        }
+      }).catch(()=>null)
+    }
+
     // Compose final result
     const finalPrompt = [
       buildPrompt(task),
@@ -201,7 +241,7 @@ export async function POST(req: NextRequest) {
 
     if (task.createdById) {
       if (succeeded) {
-        await notifyDiscordForUser(task.createdById, `AgenX: Task ${taskId} completed.`)
+        await notifyDiscordForUser(task.createdById, `AgenX: "${label}" completed.`)
         // Autonomous payout: transfer a small SOL amount from treasury to agent wallet (demo)
         try {
           const recipient = process.env.AGENT_PUBLIC_KEY || ''
@@ -212,8 +252,10 @@ export async function POST(req: NextRequest) {
             amountSol = conv ? Math.max(conv, 0.000001) : 0
           }
           if (recipient && amountSol > 0) {
-            await notifyDiscordForUser(task.createdById, `AgenX: Initiating payment of ${amountSol} SOL to agent…`)
+            await notifyDiscordForUser(task.createdById, `AgenX: Initiating payment of ${amountSol} SOL for "${label}"…`)
+            console.log('[agent/run] payout begin', { taskId, amountSol, recipient })
             const sig = await transferSol(recipient, amountSol)
+            console.log('[agent/run] payout success', { taskId, sig })
             // Record payment row
             await prisma.payment.create({
               data: {
@@ -226,9 +268,12 @@ export async function POST(req: NextRequest) {
                 txHash: sig,
               }
             })
-            await notifyDiscordForUser(task.createdById, `AgenX: Payment successful. Tx: ${sig}`)
+            const cluster = (process.env.SOLANA_NETWORK || 'devnet')
+            const link = `https://explorer.solana.com/tx/${sig}?cluster=${cluster}`
+            await notifyDiscordForUser(task.createdById, `AgenX: Payment successful for "${label}". Tx: ${sig}\n${link}`)
           }
         } catch (e) {
+          console.error('[agent/run] payout error', { taskId, error: (e as any)?.message || String(e) })
           await prisma.payment.create({
             data: {
               taskId: taskId,
@@ -240,10 +285,10 @@ export async function POST(req: NextRequest) {
               txHash: null,
             }
           }).catch(()=>null)
-          await notifyDiscordForUser(task.createdById, `AgenX: Payment failed.`)
+          await notifyDiscordForUser(task.createdById, `AgenX: Payment failed for "${label}".`)
         }
       } else {
-        await notifyDiscordForUser(task.createdById, `AgenX: Task ${taskId} failed.`)
+        await notifyDiscordForUser(task.createdById, `AgenX: "${label}" failed.`)
       }
     }
 

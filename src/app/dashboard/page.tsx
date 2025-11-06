@@ -1,5 +1,6 @@
 "use client"
 import { useEffect, useMemo, useState } from 'react'
+import { Connection, SystemProgram, Transaction, PublicKey } from '@solana/web3.js'
 import useSWR from 'swr'
 import { apiFetch, getToken } from '@/lib/api'
 import { UploadButton } from "@uploadthing/react"
@@ -59,6 +60,9 @@ export default function DashboardPage() {
   const [typeFilter, setTypeFilter] = useState<string>("ALL")
   const [quickOpen, setQuickOpen] = useState(false)
   const [prompt, setPrompt] = useState("")
+  const [stakeSol, setStakeSol] = useState<string>('0.05')
+  const [depositTx, setDepositTx] = useState<string>("")
+  const [depositing, setDepositing] = useState<boolean>(false)
   const [discordInvite, setDiscordInvite] = useState<string>("")
   const [discordConnected, setDiscordConnected] = useState<boolean>(false)
   const [discordTesting, setDiscordTesting] = useState<boolean>(false)
@@ -76,6 +80,47 @@ export default function DashboardPage() {
       const url = match.startsWith('http') ? match : `https://${match}`
       return `<a href="${url}" target="_blank" rel="noreferrer" class="underline text-[#0f3d7a]">${match}</a>`
     })
+  }
+
+  async function fundWithPhantom() {
+    try {
+      setFormError("")
+      const amt = parseFloat(stakeSol)
+      if (!amt || amt <= 0) {
+        setFormError('Enter a valid SOL amount to stake')
+        return
+      }
+      const rpc = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://api.devnet.solana.com'
+      const connection = new Connection(rpc, 'confirmed')
+      const treasury = (process.env.NEXT_PUBLIC_TREASURY_PUBLIC_KEY || process.env.PUBLIC_KEY || '').trim()
+      if (!treasury) {
+        setFormError('Treasury public key is not configured (set NEXT_PUBLIC_TREASURY_PUBLIC_KEY)')
+        return
+      }
+      // @ts-ignore
+      const provider = (window as any)?.phantom?.solana
+      if (!provider) {
+        setFormError('Phantom wallet not found. Please install Phantom and refresh.')
+        return
+      }
+      await provider.connect()
+      const from = new PublicKey(provider.publicKey?.toString())
+      const to = new PublicKey(treasury)
+      const lamports = Math.floor(amt * 1_000_000_000)
+      const { blockhash } = await connection.getLatestBlockhash('finalized')
+      const tx = new Transaction({ feePayer: from, recentBlockhash: blockhash })
+      tx.add(SystemProgram.transfer({ fromPubkey: from, toPubkey: to, lamports }))
+      setDepositing(true)
+      const signed = await provider.signAndSendTransaction(tx)
+      const signature = signed?.signature || signed
+      await connection.confirmTransaction(signature, 'confirmed')
+      setDepositTx(signature)
+      setFormSuccess(`Stake confirmed. Tx: ${signature}`)
+    } catch (e:any) {
+      setFormError(e?.message || 'Failed to fund with Phantom')
+    } finally {
+      setDepositing(false)
+    }
   }
 
   useEffect(() => {
@@ -116,6 +161,10 @@ export default function DashboardPage() {
       setFormError("Connect Discord and set a Channel ID (then Send Test Message) before creating tasks")
       return
     }
+    if (!depositTx) {
+      setFormError("Please stake SOL for this task and wait for confirmation before creating it")
+      return
+    }
     setCreating(true)
     try {
       await apiFetch('/api/tasks/quick', {
@@ -124,10 +173,14 @@ export default function DashboardPage() {
           prompt: prompt.trim() || undefined,
           attachmentId: form.attachmentId || undefined,
           saveToDrive: form.saveToDrive || false,
+          depositTxHash: depositTx,
+          depositAmountSol: stakeSol,
         })
       })
       setForm({ ...form, title: '', description: '', sourceUrl: '', inputText: '', attachmentId: undefined })
       setPrompt("")
+      setStakeSol('0.05')
+      setDepositTx("")
       mutate()
       setFormSuccess("Task created successfully")
       setQuickOpen(false)
@@ -317,6 +370,25 @@ export default function DashboardPage() {
                           <Textarea className="text-foreground" rows={6} value={prompt} onChange={e=>setPrompt(e.target.value)} placeholder="e.g. Extract insights from the attached document, research those insights online, save the report to my Google Docs, and notify me when done." />
                           <p className="text-xs text-muted-foreground">Describe your task in natural language. The agent will infer the best tools to use.</p>
                         </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div className="space-y-2">
+                            <label className="text-sm">Stake Amount (SOL)</label>
+                            <Input value={stakeSol} onChange={e=>setStakeSol(e.target.value)} className="text-foreground" placeholder="0.05" />
+                            <p className="text-xs text-muted-foreground">Send from Phantom to treasury before creating the task.</p>
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-sm">Treasury Address</label>
+                            <Input readOnly value={(process.env.NEXT_PUBLIC_TREASURY_PUBLIC_KEY || process.env.PUBLIC_KEY || '') as string} className="text-foreground" />
+                            <Button type="button" variant="secondary" onClick={fundWithPhantom} disabled={depositing}>
+                              {depositing ? 'Funding…' : 'Fund with Phantom'}
+                            </Button>
+                            {depositTx && (
+                              <div className="text-xs mt-1">
+                                Funded. Tx: <a className="underline" target="_blank" rel="noreferrer" href={`https://explorer.solana.com/tx/${depositTx}?cluster=devnet`}>{depositTx}</a>
+                              </div>
+                            )}
+                          </div>
+                        </div>
                         <div className="space-y-2">
                           <label className="text-sm">Attachment</label>
                           <div className="flex items-center gap-2">
@@ -339,7 +411,7 @@ export default function DashboardPage() {
                           <input id="saveToDrive" type="checkbox" checked={form.saveToDrive} onChange={e=>setForm(s=>({ ...s, saveToDrive: e.target.checked }))} />
                           <label htmlFor="saveToDrive" className="text-sm">Save result</label>
                         </div>
-                        <Button type="submit" disabled={creating} className="w-full">{creating ? 'Creating...' : 'Create Task'}</Button>
+                        <Button type="submit" disabled={creating || !depositTx} className="w-full">{creating ? 'Creating...' : 'Create Task'}</Button>
                       </form>
                     </CardContent>
                   </Card>

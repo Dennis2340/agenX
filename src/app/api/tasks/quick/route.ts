@@ -13,23 +13,33 @@ function getUserFromReq(req: NextRequest) {
   }
 }
 
-function categorizeIntent(prompt: string) {
-  const p = prompt.toLowerCase()
-  const wantsExtract = /(extract|summarize|insight|summary)/.test(p)
-  const wantsResearch = /(research|google|web|internet|search)/.test(p)
-  const wantsDocs = /(google doc|google docs|drive|document)/.test(p)
-
-  // Map to a coarse type the rest of the system understands
-  let type: 'SUMMARIZATION' | 'DATA_EXTRACTION' | 'CAPTIONS' = 'SUMMARIZATION'
-  if (wantsExtract) type = 'DATA_EXTRACTION'
-  if (!wantsExtract && wantsResearch) type = 'SUMMARIZATION'
-
-  const tools = {
-    webSearch: wantsResearch,
-    saveToDrive: wantsDocs,
+async function classifyTaskTypeFromPrompt(prompt: string): Promise<'SUMMARIZATION' | 'DATA_EXTRACTION'> {
+  const text = (prompt || '').slice(0, 2000)
+  const apiKey = process.env.OPENAI_API_KEY
+  if (apiKey && text) {
+    try {
+      const msg = [
+        'Classify the following task into one of these labels strictly: SUMMARIZATION or DATA_EXTRACTION.',
+        'Return only the label. No extra words.',
+        '---',
+        text,
+      ].join('\n')
+      const res = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: process.env.AGENT_MODEL || 'gpt-4o-mini', messages: [{ role: 'user', content: msg }], temperature: 0 })
+      })
+      if (res.ok) {
+        const data: any = await res.json().catch(()=>null)
+        const out = data?.choices?.[0]?.message?.content?.toString()?.trim().toUpperCase()
+        if (out === 'DATA_EXTRACTION') return 'DATA_EXTRACTION'
+        return 'SUMMARIZATION'
+      }
+    } catch {}
   }
-
-  return { type, tools }
+  const p = text.toLowerCase()
+  const keywords = ['extract', 'json', 'fields', 'table', 'columns', 'key-value']
+  return keywords.some(k => p.includes(k)) ? 'DATA_EXTRACTION' : 'SUMMARIZATION'
 }
 
 export async function POST(req: NextRequest) {
@@ -50,7 +60,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Provide a prompt or an attachment' }, { status: 400 })
     }
 
-    const { type, tools } = categorizeIntent(prompt || '')
+    const type = await classifyTaskTypeFromPrompt(prompt || '')
 
     const created = await prisma.task.create({
       data: {
@@ -90,7 +100,7 @@ export async function POST(req: NextRequest) {
       }).catch(()=>null)
     }
 
-    return NextResponse.json({ task: created, inferred: { type, tools } })
+    return NextResponse.json({ task: created, inferred: { type } })
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || 'Failed to create task' }, { status: 400 })
   }

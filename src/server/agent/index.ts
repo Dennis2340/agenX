@@ -7,7 +7,7 @@ import { getPaidFetcher } from '../payments/x402'
 export function makeTools(taskId: string) {
   const paidFetch = getPaidFetcher()
 
-  // Strict variant: requires url
+  // Strict URL variant: requires url
   const fetchUrlTextUrl = tool({
     name: 'fetch_url_text_url',
     description: 'Fetch a URL and extract readable text content for grounding.',
@@ -24,10 +24,10 @@ export function makeTools(taskId: string) {
     }
   })
 
-  // Safe variant: no parameters (prevents 400 when agent forgets args)
+  // Safe no-arg variant: never 400; logs and returns ok:false
   const fetchUrlText = tool({
     name: 'fetch_url_text',
-    description: 'Fetch URL text when a sourceUrl is known. If no URL provided, returns ok:false. Prefer fetch_url_text(url) when you have a URL.',
+    description: 'If no URL is provided, returns ok:false. Prefer fetch_url_text_url({ url }) when a URL exists.',
     parameters: z.object({}),
     execute: async () => {
       await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url: null, tag: 'no_url' }, output: { ok: false, error: 'No URL provided' }, success: false } }).catch(()=>null)

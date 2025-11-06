@@ -3,6 +3,7 @@ import { prisma } from '../../../../server/db'
 import { z } from 'zod'
 import { notifyDiscordForUser } from '@/server/notifier'
 import { fetchUrlText, askPerplexity, askTavily } from '@/server/tools/research'
+import { transferSol } from '@/server/payments/solana'
 
 const schema = z.object({
   taskId: z.string(),
@@ -123,6 +124,41 @@ export async function POST(req: NextRequest) {
     if (task.createdById) {
       if (succeeded) {
         await notifyDiscordForUser(task.createdById, `AgenX: Task ${taskId} completed.`)
+        // Autonomous payout: transfer a small SOL amount from treasury to agent wallet (demo)
+        try {
+          const recipient = process.env.AGENT_PUBLIC_KEY || ''
+          const amountSol = Number(process.env.PAYOUT_SOL || '0.01')
+          if (recipient && amountSol > 0) {
+            await notifyDiscordForUser(task.createdById, `AgenX: Initiating payment of ${amountSol} SOL to agent…`)
+            const sig = await transferSol(recipient, amountSol)
+            // Record payment row
+            await prisma.payment.create({
+              data: {
+                taskId: taskId,
+                payerUserId: task.createdById,
+                amount: amountSol.toString(),
+                currency: 'SOL',
+                network: process.env.SOLANA_NETWORK || 'devnet',
+                status: 'SUCCESS',
+                txHash: sig,
+              }
+            })
+            await notifyDiscordForUser(task.createdById, `AgenX: Payment successful. Tx: ${sig}`)
+          }
+        } catch (e) {
+          await prisma.payment.create({
+            data: {
+              taskId: taskId,
+              payerUserId: task.createdById,
+              amount: (process.env.PAYOUT_SOL || '0.01'),
+              currency: 'SOL',
+              network: process.env.SOLANA_NETWORK || 'devnet',
+              status: 'FAILED',
+              txHash: null,
+            }
+          }).catch(()=>null)
+          await notifyDiscordForUser(task.createdById, `AgenX: Payment failed.`)
+        }
       } else {
         await notifyDiscordForUser(task.createdById, `AgenX: Task ${taskId} failed.`)
       }

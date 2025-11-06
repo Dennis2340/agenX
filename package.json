@@ -10,6 +10,9 @@
     "postinstall": "npx prisma generate"
   },
   "dependencies": {
+    "@faremeter/fetch": "^0.11.1",
+    "@faremeter/info": "^0.11.1",
+    "@faremeter/payment-solana": "^0.11.1",
     "@openai/agents": "^0.3.0",
     "@prisma/client": "^5.22.0",
     "@radix-ui/react-avatar": "^1.1.11",

@@ -323,7 +323,25 @@ export default function DashboardPage() {
         setViewLoading(false)
       }
     })()
+    let timer: any
+    if (viewOpen && viewTaskId) {
+      timer = setInterval(async () => {
+        try {
+          const data = await apiFetch(`/api/tasks/${viewTaskId}`)
+          setViewDetails(data?.task || null)
+        } catch {}
+      }, 2000)
+    }
+    return () => { if (timer) clearInterval(timer) }
   }, [viewOpen, viewTaskId])
+
+  // Periodically refresh the task list while there is active work
+  useEffect(() => {
+    const hasActive = tasks?.some?.((t:any) => ['ASSIGNED','IN_PROGRESS'].includes(t.status)) || !!running
+    if (!hasActive) return
+    const id = setInterval(() => { mutate() }, 5000)
+    return () => clearInterval(id)
+  }, [tasks, running, mutate])
 
   async function runQueue() {
     setQueueRunning(true)

@@ -33,7 +33,7 @@ async function generateInstructions(task: any): Promise<string> {
     const sys = 'You write precise system instructions for an agent that must call tools in a strict order.'
     const user = [
       'Write concise instructions for AgenX based on this task. Enforce this strict tool order:',
-      '1) fetch_url_text (if sourceUrl present) 2) research_perplexity 3) research_tavily 4) optional x402_demo_call 5) synthesize final answer (bullets + 1–2 lines).',
+      '1) fetch_url_text_url({ url }) if sourceUrl present 2) research_perplexity 3) research_tavily 4) optional x402_demo_call 5) synthesize final answer (bullets + 1–2 lines).',
       'Adapt tone to task.type (SUMMARIZATION, DATA_EXTRACTION, CAPTIONS). Keep under 12 lines. No extra commentary.',
       '',
       buildPrompt(task),
@@ -67,7 +67,7 @@ function shortLabel(text: string, max = 60) {
 function buildDynamicInstructions(task: any) {
   const base = 'You are AgenX. Use tools in this strict order and keep answers concise.'
   const order = [
-    '- If a sourceUrl exists, first call fetch_url_text(url) to ground on-page text.',
+    '- If a sourceUrl exists, first call fetch_url_text_url({ url }) to ground on-page text.',
     '- Then call research_perplexity({ query }) for concise bullets.',
     '- Then call research_tavily({ query }) to corroborate and get links.',
     '- Optionally call x402_demo_call() once to demonstrate paid HTTP.',

@@ -7,16 +7,13 @@ import { getPaidFetcher } from '../payments/x402'
 export function makeTools(taskId: string) {
   const paidFetch = getPaidFetcher()
 
-  const fetchUrlText = tool({
-    name: 'fetch_url_text',
+  // Strict variant: requires url
+  const fetchUrlTextUrl = tool({
+    name: 'fetch_url_text_url',
     description: 'Fetch a URL and extract readable text content for grounding.',
-    parameters: z.object({ url: z.string().min(1).optional() }),
+    parameters: z.object({ url: z.string().url() }),
     execute: async ({ url }) => {
       try {
-        if (!url || !/^https?:\/\//i.test(url)) {
-          await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url: url || null }, output: { ok: false, error: 'No valid URL provided' }, success: false } }).catch(()=>null)
-          return { ok: false, error: 'No valid URL provided' }
-        }
         const text = await fetchUrlTextRaw(url, paidFetch)
         await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url }, output: { ok: !!text, length: text?.length || 0 }, success: !!text } }).catch(()=>null)
         return { ok: !!text, text: text || '' }
@@ -24,6 +21,17 @@ export function makeTools(taskId: string) {
         await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url }, output: { ok: false, error: e?.message || String(e) }, success: false } }).catch(()=>null)
         return { ok: false, error: e?.message || 'failed' }
       }
+    }
+  })
+
+  // Safe variant: no parameters (prevents 400 when agent forgets args)
+  const fetchUrlText = tool({
+    name: 'fetch_url_text',
+    description: 'Fetch URL text when a sourceUrl is known. If no URL provided, returns ok:false. Prefer fetch_url_text(url) when you have a URL.',
+    parameters: z.object({}),
+    execute: async () => {
+      await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url: null, tag: 'no_url' }, output: { ok: false, error: 'No URL provided' }, success: false } }).catch(()=>null)
+      return { ok: false, error: 'No URL provided' }
     }
   })
 
@@ -75,7 +83,7 @@ export function makeTools(taskId: string) {
     }
   })
 
-  return { fetchUrlText, researchPerplexity, researchTavily, x402Demo }
+  return { fetchUrlText, fetchUrlTextUrl, researchPerplexity, researchTavily, x402Demo }
 }
 
 async function synthesizeFinal(instructions: string, context: { urlText?: string; perplexity?: string; tavily?: string }): Promise<string> {
@@ -194,8 +202,8 @@ export async function runTaskPipeline({ taskId, instructions, sourceUrl, researc
 }
 
 export async function runTaskAgent({ taskId, instructions }: { taskId: string; instructions: string }): Promise<{ final: string }> {
-  const { fetchUrlText, researchPerplexity, researchTavily, x402Demo } = makeTools(taskId)
-  const agent = new Agent({ name: 'AgenX Researcher', instructions, model: process.env.AGENT_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini', tools: [fetchUrlText, researchPerplexity, researchTavily, x402Demo] })
+  const { fetchUrlText, fetchUrlTextUrl, researchPerplexity, researchTavily, x402Demo } = makeTools(taskId)
+  const agent = new Agent({ name: 'AgenX Researcher', instructions, model: process.env.AGENT_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini', tools: [fetchUrlTextUrl, fetchUrlText, researchPerplexity, researchTavily, x402Demo] })
   const result = await run(agent, 'Proceed with the task as instructed.')
   const final = String(result.finalOutput || '').trim()
   return { final }

@@ -12,9 +12,9 @@ const updateSchema = z.object({
   resultDriveFileId: z.string().optional(),
 })
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const task = await prisma.task.findUnique({
-    where: { id: params.id },
+    where: { id: (await params).id },
     include: { payments: true, toolRuns: true, assignedAgent: true, attachment: true }
   })
   if (!task) return NextResponse.json({ error: 'Not found' }, { status: 404 })

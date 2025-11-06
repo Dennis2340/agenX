@@ -2,9 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '../../../../server/db'
 import { z } from 'zod'
 import { notifyDiscordForUser } from '@/server/notifier'
-import { fetchUrlText, askPerplexity, askTavily } from '@/server/tools/research'
 import { transferSol, usdToSol } from '@/server/payments/solana'
-import { getPaidFetcher } from '@/server/payments/x402'
+import { runTaskAgent, runX402DemoOnce } from '@/server/agent'
 
 const schema = z.object({
   taskId: z.string(),
@@ -27,10 +26,65 @@ function buildPrompt(task: any) {
   return lines.join('\n')
 }
 
+async function generateInstructions(task: any): Promise<string> {
+  try {
+    const apiKey = process.env.OPENAI_API_KEY
+    if (!apiKey) throw new Error('OPENAI_API_KEY missing')
+    const sys = 'You write precise system instructions for an agent that must call tools in a strict order.'
+    const user = [
+      'Write concise instructions for AgenX based on this task. Enforce this strict tool order:',
+      '1) fetch_url_text (if sourceUrl present) 2) research_perplexity 3) research_tavily 4) optional x402_demo_call 5) synthesize final answer (bullets + 1–2 lines).',
+      'Adapt tone to task.type (SUMMARIZATION, DATA_EXTRACTION, CAPTIONS). Keep under 12 lines. No extra commentary.',
+      '',
+      buildPrompt(task),
+    ].join('\n')
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: process.env.AGENT_MODEL || 'gpt-4o-mini',
+        messages: [ { role: 'system', content: sys }, { role: 'user', content: user } ],
+        temperature: 0.2,
+      })
+    })
+    if (!res.ok) throw new Error(`openai ${res.status}`)
+    const data: any = await res.json().catch(()=>null)
+    const text = data?.choices?.[0]?.message?.content?.toString()?.trim()
+    if (text) return text
+    throw new Error('no instructions')
+  } catch (e:any) {
+    console.error('[agent/run] generateInstructions fallback', { error: e?.message || String(e) })
+    return buildDynamicInstructions(task)
+  }
+}
+
 function shortLabel(text: string, max = 60) {
   const t = (text || '').trim()
   if (t.length <= max) return t
   return t.slice(0, max) + '…'
+}
+
+function buildDynamicInstructions(task: any) {
+  const base = 'You are AgenX. Use tools in this strict order and keep answers concise.'
+  const order = [
+    '- If a sourceUrl exists, first call fetch_url_text(url) to ground on-page text.',
+    '- Then call research_perplexity({ query }) for concise bullets.',
+    '- Then call research_tavily({ query }) to corroborate and get links.',
+    '- Optionally call x402_demo_call() once to demonstrate paid HTTP.',
+    '- Finally, synthesize bullets + a 1–2 line summary.'
+  ].join('\n')
+  let typeNote = ''
+  switch (task.type) {
+    case 'DATA_EXTRACTION':
+      typeNote = 'Task type: DATA_EXTRACTION. Prefer structured bullets and key fields.'
+      break
+    case 'CAPTIONS':
+      typeNote = 'Task type: CAPTIONS. Produce short, human-friendly captions.'
+      break
+    default:
+      typeNote = 'Task type: SUMMARIZATION. Produce concise bullets.'
+  }
+  return [base, typeNote, 'Policy (strict tool order):', order, '', buildPrompt(task)].join('\n')
 }
 
 async function runWithOpenAI(prompt: string) {
@@ -72,156 +126,14 @@ export async function POST(req: NextRequest) {
     await prisma.task.update({ where: { id: taskId }, data: { status: 'IN_PROGRESS' } })
     if (task.createdById) await notifyDiscordForUser(task.createdById, `AgenX: "${label}" in progress…`)
 
-    // Gather base text from attachment or URL or inputText
-    const paidFetch = getPaidFetcher()
-    const attachmentText = task.attachment?.extractedText || null
-    let urlText: string | null = null
-    if (task.sourceUrl) {
-      try {
-        urlText = await fetchUrlText(task.sourceUrl, paidFetch)
-        await prisma.toolRun.create({
-          data: {
-            taskId: taskId,
-            tool: 'DOC_PARSER',
-            input: { url: task.sourceUrl },
-            output: { ok: !!urlText, length: urlText?.length || 0 },
-            success: true,
-          }
-        })
-      } catch (e) {
-        await prisma.toolRun.create({
-          data: {
-            taskId: taskId,
-            tool: 'DOC_PARSER',
-            input: { url: task.sourceUrl },
-            output: { ok: false },
-            success: false,
-          }
-        }).catch(()=>null)
-      }
-    }
-    const baseText = [task.inputText, attachmentText, urlText].filter(Boolean).join('\n\n').slice(0, 6000)
-
-    // Extract insights from baseText if available
-    let insights = ''
-    if (baseText) {
-      const extractPrompt = [
-        buildPrompt(task),
-        '',
-        'Given the following content, extract 5-10 key insights as bullet points:',
-        baseText,
-      ].join('\n')
-      insights = (await runWithOpenAI(extractPrompt)) || ''
-    }
-
-    // Research using Perplexity and Tavily
-    const researchQuery = insights || task.description || task.inputText || 'Perform a short market analysis based on the topic.'
-    const [px, tv] = await Promise.all([
-      (async () => {
-        try {
-          const q = `Research and provide concise evidence-backed bullets for: ${researchQuery}`
-          const r = await askPerplexity(q, paidFetch)
-          await prisma.toolRun.create({
-            data: {
-              taskId: taskId,
-              tool: 'PERPLEXITY',
-              input: { query: q },
-              output: { ok: !!r },
-              success: !!r,
-            }
-          })
-          return r
-        } catch (e) {
-          await prisma.toolRun.create({
-            data: {
-              taskId: taskId,
-              tool: 'PERPLEXITY',
-              input: { query: researchQuery },
-              output: { ok: false },
-              success: false,
-            }
-          }).catch(()=>null)
-          return null
-        }
-      })(),
-      (async () => {
-        try {
-          const q = `Research and provide concise bullets with top sources for: ${researchQuery}`
-          const r = await askTavily(q, paidFetch)
-          await prisma.toolRun.create({
-            data: {
-              taskId: taskId,
-              tool: 'TAVILY',
-              input: { query: q },
-              output: { ok: !!r },
-              success: !!r,
-            }
-          })
-          return r
-        } catch (e) {
-          await prisma.toolRun.create({
-            data: {
-              taskId: taskId,
-              tool: 'TAVILY',
-              input: { query: researchQuery },
-              output: { ok: false },
-              success: false,
-            }
-          }).catch(()=>null)
-          return null
-        }
-      })(),
-    ])
-
-    // Real x402 demo call to a paywalled endpoint (for showcase)
-    try {
-      const demoRes = await paidFetch('https://triton.api.corbits.dev', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getBlockHeight' }),
-      })
-      const ok = demoRes.ok
-      console.log('[agent/run] x402 demo response', { status: demoRes.status, ok })
-      await prisma.toolRun.create({
-        data: {
-          taskId: taskId,
-          tool: 'DOC_PARSER',
-          input: { url: 'https://triton.api.corbits.dev', method: 'POST', rpc: 'getBlockHeight', tag: 'x402_demo' },
-          output: { status: demoRes.status, ok },
-          success: ok,
-        }
-      })
-    } catch (e) {
-      console.error('[agent/run] x402 demo error', { error: (e as any)?.message || String(e) })
-      await prisma.toolRun.create({
-        data: {
-          taskId: taskId,
-          tool: 'DOC_PARSER',
-          input: { url: 'https://triton.api.corbits.dev', method: 'POST', rpc: 'getBlockHeight', tag: 'x402_demo' },
-          output: { ok: false },
-          success: false,
-        }
-      }).catch(()=>null)
-    }
-
-    // Compose final result
-    const finalPrompt = [
-      buildPrompt(task),
-      '',
-      insights ? 'Insights extracted from document:' : 'No document insights available.',
-      insights || '(none)',
-      '',
-      'External research (Perplexity):',
-      px || '(none)',
-      '',
-      'External research (Tavily):',
-      tv || '(none)',
-      '',
-      'Produce a final consolidated output that follows the TaskType output rules. Include a short sources section at the end if available.'
-    ].join('\n')
-
-    const aiResult = await runWithOpenAI(finalPrompt)
-    const content = (aiResult ?? insights ?? px ?? tv ?? '').toString().trim()
+    // Build dynamic instructions and run autonomous agent with tool-calling
+    const inst = await generateInstructions(task)
+    console.log('[agent/run] autonomous begin', { taskId, hasUrl: !!task.sourceUrl })
+    const { final: contentRaw } = await runTaskAgent({ taskId, instructions: inst })
+    console.log('[agent/run] autonomous done', { taskId, hasOutput: !!contentRaw })
+    const content = contentRaw || ''
+    // Run x402 demo once after to log spend consistently
+    try { await runX402DemoOnce(taskId) } catch {}
 
     const succeeded = !!content
     const updated = await prisma.task.update({
@@ -229,15 +141,19 @@ export async function POST(req: NextRequest) {
       data: { resultText: succeeded ? content : null, status: succeeded ? 'COMPLETED' : 'FAILED' }
     })
 
-    await prisma.toolRun.create({
-      data: {
-        taskId: taskId,
-        tool: 'OPENAI',
-        input: { baseText: !!baseText, usedPerplexity: !!px, usedTavily: !!tv },
-        output: { content },
-        success: true,
-      }
-    })
+    try {
+      await prisma.toolRun.create({
+        data: {
+          taskId: taskId,
+          tool: 'OPENAI',
+          input: { agent: 'AgentsSDK', hadOutput: !!content },
+          output: { content },
+          success: true,
+        }
+      })
+    } catch (e) {
+      console.error('[agent/run] toolRun OPENAI log failed', { taskId, error: (e as any)?.message || String(e) })
+    }
 
     if (task.createdById) {
       if (succeeded) {
@@ -294,6 +210,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ task: updated })
   } catch (e: any) {
+    console.error('[agent/run] unhandled error', { error: e?.message || String(e) })
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
   }
 }

@@ -11,7 +11,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
-import { Menu, LogOut, UploadCloud } from "lucide-react"
+import { Menu, LogOut, UploadCloud, Pencil, Save, X } from "lucide-react"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 
 const TaskTypes = ['SUMMARIZATION', 'CAPTIONS', 'DATA_EXTRACTION'] as const
@@ -54,6 +54,7 @@ export default function DashboardPage() {
   const [creating, setCreating] = useState(false)
   const [running, setRunning] = useState<string | null>(null)
   const [challenge, setChallenge] = useState<Record<string, any>>({})
+  const [deletingId, setDeletingId] = useState<string | null>(null)
   const [formError, setFormError] = useState<string>("")
   const [formSuccess, setFormSuccess] = useState<string>("")
   const [statusFilter, setStatusFilter] = useState<string>("ALL")
@@ -73,6 +74,11 @@ export default function DashboardPage() {
   const [queueRunning, setQueueRunning] = useState(false)
   const [viewLoading, setViewLoading] = useState(false)
   const [viewDetails, setViewDetails] = useState<any | null>(null)
+  const [mdRenderer, setMdRenderer] = useState<any>(null)
+  const [mdGfm, setMdGfm] = useState<any>(null)
+  const [isEditingResult, setIsEditingResult] = useState(false)
+  const [editMarkdown, setEditMarkdown] = useState<string>("")
+  const [savingResult, setSavingResult] = useState(false)
 
   function linkify(text: string) {
     const urlRegex = /(https?:\/\/[^\s)]+)|(www\.[^\s)]+)/g
@@ -80,6 +86,92 @@ export default function DashboardPage() {
       const url = match.startsWith('http') ? match : `https://${match}`
       return `<a href="${url}" target="_blank" rel="noreferrer" class="underline text-[#0f3d7a]">${match}</a>`
     })
+  }
+
+  // Try to dynamically load react-markdown + remark-gfm at runtime
+  useEffect(() => {
+    ;(async () => {
+      try {
+        const m = await import('react-markdown')
+        setMdRenderer(() => m.default)
+      } catch {}
+      try {
+        const g = await import('remark-gfm')
+        setMdGfm(() => (g as any).default || g)
+      } catch {}
+    })()
+  }, [])
+
+  function jsonToMarkdown(obj: any): string {
+    let out: string[] = []
+    if (obj.main_points && Array.isArray(obj.main_points)) {
+      out.push('## Main points')
+      obj.main_points.forEach((p: string) => out.push(`- ${p}`))
+      out.push('')
+    }
+    if (obj.actionable_insights && Array.isArray(obj.actionable_insights)) {
+      out.push('## Actionable insights')
+      obj.actionable_insights.forEach((p: string) => out.push(`- ${p}`))
+      out.push('')
+    }
+    if (obj.competitors && Array.isArray(obj.competitors)) {
+      out.push('## Competitors')
+      obj.competitors.forEach((c: any) => {
+        const name = c['Brand/Product'] || c.name || 'Competitor'
+        const kf = c['Key Features'] || c.features || ''
+        const mp = c['Market Presence'] || c.presence || ''
+        out.push(`- **${name}** — ${kf}${mp ? ` (${mp})` : ''}`)
+      })
+      out.push('')
+    }
+    if (obj.action_plan) {
+      out.push('## Action plan')
+      out.push(String(obj.action_plan))
+      out.push('')
+    }
+    if (obj.Summary || obj.summary) {
+      out.push('## Summary')
+      out.push(String(obj.Summary || obj.summary))
+      out.push('')
+    }
+    return out.join('\n')
+  }
+
+  function resultToMarkdown(text?: string | null): string {
+    if (!text) return ''
+    // If it's valid JSON, format to Markdown sections
+    try {
+      const parsed = JSON.parse(text)
+      return jsonToMarkdown(parsed)
+    } catch {}
+    // Otherwise, treat it as already Markdown/plain text
+    return text
+  }
+
+  async function saveResultMarkdown(taskId: string) {
+    try {
+      setSavingResult(true)
+      await apiFetch(`/api/tasks/${taskId}`, { method: 'PATCH', body: JSON.stringify({ resultText: editMarkdown }) })
+      await mutate()
+      setIsEditingResult(false)
+    } catch (e:any) {
+      alert(e?.message || 'Failed to save result')
+    } finally {
+      setSavingResult(false)
+    }
+  }
+
+  async function deleteTask(taskId: string) {
+    try {
+      if (!confirm('Delete this task permanently?')) return
+      setDeletingId(taskId)
+      await apiFetch(`/api/tasks/${taskId}`, { method: 'DELETE' })
+      await mutate()
+    } catch (e:any) {
+      alert(e?.message || 'Failed to delete task')
+    } finally {
+      setDeletingId(null)
+    }
   }
 
   async function fundWithPhantom() {
@@ -92,9 +184,9 @@ export default function DashboardPage() {
       }
       const rpc = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://api.devnet.solana.com'
       const connection = new Connection(rpc, 'confirmed')
-      const treasury = (process.env.NEXT_PUBLIC_TREASURY_PUBLIC_KEY || process.env.PUBLIC_KEY || '').trim()
+      const treasury = (process.env.PUBLIC_KEY || '').trim()
       if (!treasury) {
-        setFormError('Treasury public key is not configured (set NEXT_PUBLIC_TREASURY_PUBLIC_KEY)')
+        setFormError('Treasury public key is not configured (set PUBLIC_KEY)')
         return
       }
       // @ts-ignore
@@ -378,7 +470,7 @@ export default function DashboardPage() {
                           </div>
                           <div className="space-y-2">
                             <label className="text-sm">Treasury Address</label>
-                            <Input readOnly value={(process.env.NEXT_PUBLIC_TREASURY_PUBLIC_KEY || process.env.PUBLIC_KEY || '') as string} className="text-foreground" />
+                            <Input readOnly value={(process.env.PUBLIC_KEY || '') as string} className="text-foreground" />
                             <Button type="button" variant="secondary" onClick={fundWithPhantom} disabled={depositing}>
                               {depositing ? 'Funding…' : 'Fund with Phantom'}
                             </Button>
@@ -487,10 +579,22 @@ export default function DashboardPage() {
                               {t.resultText && (
                                 <Button variant="secondary" onClick={()=>{ setViewTaskId(t.id); setViewOpen(true) }}>View Result</Button>
                               )}
+                              <Button variant="destructive" onClick={()=>deleteTask(t.id)} disabled={deletingId===t.id}>{deletingId===t.id? 'Deleting…' : 'Delete'}</Button>
                             </div>
                           </div>
                           {t.resultText && (
-                            <pre className="mt-3 whitespace-pre-wrap rounded bg-[#f7fbff] p-3 text-sm text-[#0f3d7a]">{t.resultText}</pre>
+                            <div className="mt-3 rounded bg-[#f7fbff] p-3 text-sm text-[#0f3d7a]">
+                              {(() => {
+                                const MD = mdRenderer
+                                const gfm = mdGfm
+                                const md = resultToMarkdown(t.resultText)
+                                if (MD) {
+                                  const Comp = MD as any
+                                  return <Comp remarkPlugins={gfm ? [gfm] : []}>{md}</Comp>
+                                }
+                                return <pre className="whitespace-pre-wrap">{md}</pre>
+                              })()}
+                            </div>
                           )}
                           {challenge[t.id] && (
                             <pre className="mt-3 whitespace-pre-wrap rounded bg-[#fff7f2] p-3 text-xs text-[#7a3d0f]">{JSON.stringify(challenge[t.id], null, 2)}</pre>
@@ -513,15 +617,53 @@ export default function DashboardPage() {
         <SheetContent side="right" className="w-full sm:w-[700px] overflow-y-auto">
           <Card>
             <CardHeader>
-              <CardTitle>Result</CardTitle>
+              <div className="flex items-center justify-between">
+                <CardTitle>Result</CardTitle>
+                {viewTaskId && (
+                  !isEditingResult ? (
+                    <Button size="sm" variant="outline" onClick={() => {
+                      const task = tasks.find(x => x.id === viewTaskId)
+                      setEditMarkdown(resultToMarkdown(task?.resultText))
+                      setIsEditingResult(true)
+                    }}>
+                      <Pencil className="h-4 w-4 mr-1" /> Edit
+                    </Button>
+                  ) : (
+                    <div className="flex gap-2">
+                      <Button size="sm" variant="secondary" onClick={() => saveResultMarkdown(viewTaskId)} disabled={savingResult}>
+                        <Save className="h-4 w-4 mr-1" /> {savingResult ? 'Saving…' : 'Save'}
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => setIsEditingResult(false)}>
+                        <X className="h-4 w-4 mr-1" /> Cancel
+                      </Button>
+                    </div>
+                  )
+                )}
+              </div>
             </CardHeader>
             <CardContent>
               {(() => {
                 const task = tasks.find(x => x.id === viewTaskId)
-                const html = task?.resultText ? linkify(task.resultText) : ''
-                return (
-                  <div className="prose max-w-none whitespace-pre-wrap text-sm" dangerouslySetInnerHTML={{ __html: html }} />
-                )
+                const md = resultToMarkdown(task?.resultText)
+                if (isEditingResult) {
+                  return (
+                    <div className="space-y-2">
+                      <label className="text-sm">Markdown editor</label>
+                      <Textarea className="text-foreground min-h-[260px]" value={editMarkdown} onChange={(e)=>setEditMarkdown(e.target.value)} />
+                    </div>
+                  )
+                }
+                const MD = mdRenderer
+                const gfm = mdGfm
+                if (MD) {
+                  const Comp = MD as any
+                  return (
+                    <div className="prose max-w-none text-sm">
+                      <Comp remarkPlugins={gfm ? [gfm] : []}>{md}</Comp>
+                    </div>
+                  )
+                }
+                return <pre className="whitespace-pre-wrap rounded bg-[#f7fbff] p-3 text-sm text-[#0f3d7a]">{md}</pre>
               })()}
               <div className="mt-6">
                 <div className="font-semibold mb-2">Research Spend</div>

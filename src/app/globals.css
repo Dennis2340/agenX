@@ -110,3 +110,26 @@ label { color: var(--foreground); }
     @apply bg-background text-foreground;
  }
 }
+
+/* Horizontal scroll utility for mobile rails */
+.h-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+.h-scroll::-webkit-scrollbar {
+  height: 8px;
+}
+.h-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in oklch, var(--foreground) 30%, transparent);
+  border-radius: 9999px;
+}
+.h-scroll-inner {
+  display: flex;
+  gap: 0.75rem; /* 12px */
+  padding-bottom: 0.25rem;
+}
+.h-card {
+  flex: 0 0 auto;
+  width: 16rem; /* 256px */
+}

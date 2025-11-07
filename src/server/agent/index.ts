@@ -214,6 +214,26 @@ export async function runTaskPipeline({ taskId, instructions, sourceUrl, researc
       return { ok: false }
     }
   }
+  const runSolDemoOnce = async () => {
+    const uid = (await prisma.task.findUnique({ where: { id: taskId }, select: { createdById: true } }))?.createdById || null
+    const amt = process.env.DEMO_SOL_PER_CALL || '0.0005'
+    const to = process.env.AGENT_PUBLIC_KEY || process.env.NEXT_PUBLIC_PUBLIC_KEY || process.env.PUBLIC_KEY || ''
+    try {
+      if (!to) throw new Error('Treasury/recipient public key not configured')
+      if (uid) await notifyDiscordForUser(uid, `AgenX: Payment attempt → SOL demo ${amt} SOL`)
+      const { tx } = await sendSol(to, amt)
+      const res = await fetch('https://api.devnet.solana.com', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getBlockHeight' }) })
+      const ok = res.ok
+      await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { to, amount: amt, tag: 'sol_demo' }, output: { ok, txHash: tx, amount: amt, currency: 'SOL', status: res.status }, success: ok } }).catch(()=>null)
+      if (uid) await notifyDiscordForUser(uid, `AgenX: Payment success → SOL demo ${amt} SOL (tx ${tx})`)
+      return { ok, tx }
+    } catch (e:any) {
+      await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { to, amount: amt, tag: 'sol_demo' }, output: { ok: false, error: e?.message || String(e) }, success: false } }).catch(()=>null)
+      if (uid) await notifyDiscordForUser(uid, `AgenX: Payment failed → SOL demo ${amt} SOL :: ${e?.message || 'error'}`)
+      return { ok: false }
+    }
+  }
+
   const parts: { urlText?: string; perplexity?: string; tavily?: string } = {}
 
   if (sourceUrl) {
@@ -271,9 +291,33 @@ export async function runX402DemoOnce(taskId: string) {
   try {
     const res = await paidFetch('https://triton.api.corbits.dev', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getBlockHeight' }) })
     await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url: 'https://triton.api.corbits.dev', tag: 'x402_demo' }, output: { status: res.status, ok: res.ok }, success: res.ok } }).catch(()=>null)
+    const t = await prisma.task.findUnique({ where: { id: taskId }, select: { createdById: true } })
+    if (t?.createdById) await notifyDiscordForUser(t.createdById, `AgenX: Payment ${res.ok ? 'success' : 'result'} → X402 demo (status ${res.status})`)
     return { ok: res.ok }
   } catch (e:any) {
     await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url: 'https://triton.api.corbits.dev', tag: 'x402_demo' }, output: { ok: false, error: e?.message || String(e) }, success: false } }).catch(()=>null)
+    const t = await prisma.task.findUnique({ where: { id: taskId }, select: { createdById: true } })
+    if (t?.createdById) await notifyDiscordForUser(t.createdById, `AgenX: Payment failed → X402 demo :: ${e?.message || 'error'}`)
+    return { ok: false }
+  }
+}
+
+export async function runSolDemoOnce(taskId: string) {
+  const uid = (await prisma.task.findUnique({ where: { id: taskId }, select: { createdById: true } }))?.createdById || null
+  const amt = process.env.DEMO_SOL_PER_CALL || '0.0005'
+  const to = process.env.AGENT_PUBLIC_KEY || process.env.NEXT_PUBLIC_PUBLIC_KEY || process.env.PUBLIC_KEY || ''
+  try {
+    if (!to) throw new Error('Treasury/recipient public key not configured')
+    if (uid) await notifyDiscordForUser(uid, `AgenX: Payment attempt → SOL demo ${amt} SOL`)
+    const { tx } = await sendSol(to, amt)
+    const res = await fetch('https://api.devnet.solana.com', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getBlockHeight' }) })
+    const ok = res.ok
+    await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { to, amount: amt, tag: 'sol_demo' }, output: { ok, txHash: tx, amount: amt, currency: 'SOL', status: res.status }, success: ok } }).catch(()=>null)
+    if (uid) await notifyDiscordForUser(uid, `AgenX: Payment success → SOL demo ${amt} SOL (tx ${tx})`)
+    return { ok, tx }
+  } catch (e:any) {
+    await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { to, amount: amt, tag: 'sol_demo' }, output: { ok: false, error: e?.message || String(e) }, success: false } }).catch(()=>null)
+    if (uid) await notifyDiscordForUser(uid, `AgenX: Payment failed → SOL demo ${amt} SOL :: ${e?.message || 'error'}`)
     return { ok: false }
   }
 }

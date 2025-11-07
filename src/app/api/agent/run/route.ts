@@ -4,7 +4,7 @@ import { sendSol } from '../../../../server/payments/x402'
 import { z } from 'zod'
 import { notifyDiscordForUser } from '@/server/notifier'
 import { transferSol, usdToSol } from '@/server/payments/solana'
-import { runTaskAgent, runX402DemoOnce } from '@/server/agent'
+import { runTaskAgent, runX402DemoOnce, runSolDemoOnce } from '@/server/agent'
 
 const schema = z.object({
   taskId: z.string(),
@@ -144,8 +144,21 @@ export async function POST(req: NextRequest) {
     } catch (e:any) {
       console.error('[agent/run] agent error (non-fatal)', { taskId, error: e?.message || String(e) })
     }
-    // Run x402 demo once after to log spend consistently (non-fatal)
-    try { await runX402DemoOnce(taskId) } catch {}
+    // Run demos once after to log spend consistently (non-fatal)
+    try {
+      console.log('[agent/run] x402 demo begin', { taskId })
+      const r = await runX402DemoOnce(taskId)
+      console.log('[agent/run] x402 demo done', { taskId, ok: !!r?.ok })
+    } catch (e:any) {
+      console.error('[agent/run] x402 demo error', { taskId, error: e?.message || String(e) })
+    }
+    try {
+      console.log('[agent/run] sol demo begin', { taskId })
+      const r = await runSolDemoOnce(taskId)
+      console.log('[agent/run] sol demo done', { taskId, ok: !!r?.ok })
+    } catch (e:any) {
+      console.error('[agent/run] sol demo error', { taskId, error: e?.message || String(e) })
+    }
 
     const succeeded = !!content
     const updated = await prisma.task.update({

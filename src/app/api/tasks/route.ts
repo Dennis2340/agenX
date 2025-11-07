@@ -92,6 +92,13 @@ export async function POST(req: NextRequest) {
       },
       include: { payments: true }
     })
+    // Fire-and-forget: immediately trigger the agent to start on this task
+    try {
+      const origin = (req as any)?.nextUrl?.origin || ''
+      const url = origin ? `${origin}/api/agent/run` : (process.env.PUBLIC_BASE_URL ? `${process.env.PUBLIC_BASE_URL}/api/agent/run` : '/api/agent/run')
+      // do not await; avoid delaying response
+      fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ taskId: task.id }) }).catch(()=>{})
+    } catch {}
 
     return NextResponse.json({ task })
   } catch (e: any) {

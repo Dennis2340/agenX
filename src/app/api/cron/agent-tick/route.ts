@@ -13,9 +13,13 @@ export async function GET(req: NextRequest) {
   const secret = process.env.CRON_SECRET
   if (secret) {
     const header = req.headers.get('x-cron-secret')
+    const bearer = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '')
+    const vercelCron = req.headers.get('x-vercel-cron')
     const url = new URL(req.url)
     const qp = url.searchParams.get('key')
-    if (header !== secret && qp !== secret) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    if (header !== secret && qp !== secret && bearer !== secret && !vercelCron) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
   }
 
   // Find a small batch of tasks that are ready to run (including freshly posted)

@@ -844,20 +844,35 @@ export default function DashboardPage() {
                   <div className="space-y-2">
                     {viewDetails.toolRuns
                       .filter((tr: any)=> ['PERPLEXITY','TAVILY','DOC_PARSER'].includes(tr.tool))
-                      .map((tr: any, idx: number)=> (
-                        <div key={idx} className="rounded border p-2 text-xs">
-                          <div className="flex items-center justify-between">
-                            <span className="font-medium">{tr.tool}</span>
-                            <Badge variant={tr.success? 'secondary':'destructive'}>{tr.success? 'OK':'FAIL'}</Badge>
+                      .map((tr: any, idx: number)=> {
+                        const amt = tr?.output?.amount
+                        const cur = tr?.output?.currency || ''
+                        const tx = tr?.output?.txHash
+                        const isSolDemo = tr?.input?.tag === 'sol_demo'
+                        const cluster = (process.env.NEXT_PUBLIC_SOLANA_NETWORK || 'devnet') as string
+                        return (
+                          <div key={idx} className="rounded border p-2 text-xs">
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="font-medium truncate">{tr.tool}{isSolDemo ? ' (SOL demo)' : ''}</span>
+                              <div className="flex items-center gap-2 shrink-0">
+                                {amt && (
+                                  <span className="text-muted-foreground">Spend: {amt} {cur}</span>
+                                )}
+                                <Badge variant={tr.success? 'secondary':'destructive'}>{tr.success? 'OK':'FAIL'}</Badge>
+                              </div>
+                            </div>
+                            {tr.input?.url && (
+                              <div className="mt-1 truncate">URL: <a className="underline" href={tr.input.url} target="_blank" rel="noreferrer">{tr.input.url}</a></div>
+                            )}
+                            {tr.input?.query && (
+                              <div className="mt-1 truncate">Query: {tr.input.query}</div>
+                            )}
+                            {tx && isSolDemo && (
+                              <div className="mt-1 truncate">Tx: <a className="underline" href={`https://explorer.solana.com/tx/${tx}?cluster=${cluster}`} target="_blank" rel="noreferrer">{tx}</a></div>
+                            )}
                           </div>
-                          {tr.input?.url && (
-                            <div className="mt-1 truncate">URL: <a className="underline" href={tr.input.url} target="_blank" rel="noreferrer">{tr.input.url}</a></div>
-                          )}
-                          {tr.input?.query && (
-                            <div className="mt-1 truncate">Query: {tr.input.query}</div>
-                          )}
-                        </div>
-                      ))}
+                        )
+                      })}
                   </div>
                 )}
               </div>

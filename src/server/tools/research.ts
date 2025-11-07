@@ -30,7 +30,7 @@ export async function askPerplexity(prompt: string, fetchImpl: typeof fetch = fe
   const key = process.env.PERPLEXITY_API_KEY
   if (!key) return { text: null }
   try {
-    const endpoint = 'https://api.perplexity.ai/chat/completions'
+    const endpoint = process.env.PERPLEXITY_ENDPOINT || 'https://api.perplexity.ai/chat/completions'
     const res = await fetchImpl(endpoint, {
       method: 'POST',
       headers: {
@@ -65,7 +65,7 @@ export async function askTavily(prompt: string, fetchImpl: typeof fetch = fetch)
   const key = process.env.TAVILY_API_KEY
   if (!key) return { text: null }
   try {
-    const endpoint = 'https://api.tavily.com/search'
+    const endpoint = process.env.TAVILY_ENDPOINT || 'https://api.tavily.com/search'
     const res = await fetchImpl(endpoint, {
       method: 'POST',
       headers: {

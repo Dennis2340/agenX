@@ -1,11 +1,19 @@
 import { Agent, run, tool } from '@openai/agents'
 import { z } from 'zod'
 import { prisma } from '../db'
+import { notifyDiscordForUser } from '../notifier'
 import { fetchUrlText as fetchUrlTextRaw, askPerplexity as askPerplexityRaw, askTavily as askTavilyRaw } from '../tools/research'
-import { getPaidFetcher } from '../payments/x402'
+import { getPaidFetcher, sendSol } from '../payments/x402'
 
 export function makeTools(taskId: string, hasUrl: boolean) {
   const paidFetch = getPaidFetcher()
+  let cachedUserId: string | null | undefined
+  const getUserId = async (): Promise<string | null> => {
+    if (typeof cachedUserId !== 'undefined') return cachedUserId
+    const t = await prisma.task.findUnique({ where: { id: taskId }, select: { createdById: true } })
+    cachedUserId = t?.createdById || null
+    return cachedUserId
+  }
 
   // Strict URL tool: only registered when a source URL exists on the task
   const fetchUrlText = tool({
@@ -14,12 +22,46 @@ export function makeTools(taskId: string, hasUrl: boolean) {
     parameters: z.object({ url: z.string().url().describe('http(s) URL to fetch and extract text from') }),
     execute: async ({ url }) => {
       try {
+        const uid = await getUserId()
+        if (uid) await notifyDiscordForUser(uid, `AgenX: Payment attempt → DOC_PARSER (${url})`)
         const out = await fetchUrlTextRaw(url, paidFetch)
         const ok = !!out?.text
         await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url }, output: { ok, length: out?.text?.length || 0, amount: out?.paid?.amount, currency: out?.paid?.currency }, success: ok } }).catch(()=>null)
+        if (uid) {
+          if (ok && out?.paid?.amount) await notifyDiscordForUser(uid, `AgenX: Payment success → DOC_PARSER ${out.paid.amount} ${out.paid.currency || ''}`.trim())
+          if (!ok) await notifyDiscordForUser(uid, `AgenX: Payment result → DOC_PARSER failed`)
+        }
         return { ok, text: out?.text || '' }
       } catch (e:any) {
         await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url }, output: { ok: false, error: e?.message || String(e) }, success: false } }).catch(()=>null)
+        const uid = await getUserId(); if (uid) await notifyDiscordForUser(uid, `AgenX: Payment failed → DOC_PARSER (${url}) :: ${(e as any)?.message || 'error'}`)
+        return { ok: false, error: e?.message || 'failed' }
+      }
+    }
+  })
+
+  // SOL-paid demo: send a small SOL amount to treasury, then call a public devnet RPC
+  const solPaidDemo = tool({
+    name: 'sol_paid_call',
+    description: 'Send a tiny SOL payment to the treasury (demo), then call Solana devnet RPC.',
+    parameters: z.object({ amount: z.string().optional() }),
+    execute: async ({ amount }) => {
+      const uid = await getUserId()
+      const amt = amount || process.env.DEMO_SOL_PER_CALL || '0.0005'
+      const to = process.env.AGENT_PUBLIC_KEY || process.env.NEXT_PUBLIC_PUBLIC_KEY || process.env.PUBLIC_KEY || ''
+      try {
+        if (!to) throw new Error('Treasury/recipient public key not configured')
+        if (uid) await notifyDiscordForUser(uid, `AgenX: Payment attempt → SOL demo ${amt} SOL`)
+        const { tx } = await sendSol(to, amt)
+        // call a public devnet RPC after payment
+        const res = await fetch('https://api.devnet.solana.com', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getBlockHeight' }) })
+        const ok = res.ok
+        await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { to, amount: amt, tag: 'sol_demo' }, output: { ok, txHash: tx, amount: amt, currency: 'SOL', status: res.status }, success: ok } }).catch(()=>null)
+        if (uid) await notifyDiscordForUser(uid, `AgenX: Payment success → SOL demo ${amt} SOL (tx ${tx})`)
+        return { ok, tx, status: res.status }
+      } catch (e:any) {
+        await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { to, amount: amt, tag: 'sol_demo' }, output: { ok: false, error: e?.message || String(e) }, success: false } }).catch(()=>null)
+        if (uid) await notifyDiscordForUser(uid, `AgenX: Payment failed → SOL demo ${amt} SOL :: ${e?.message || 'error'}`)
         return { ok: false, error: e?.message || 'failed' }
       }
     }
@@ -31,12 +73,19 @@ export function makeTools(taskId: string, hasUrl: boolean) {
     parameters: z.object({ query: z.string().min(2) }),
     execute: async ({ query }) => {
       try {
+        const uid = await getUserId()
+        if (uid) await notifyDiscordForUser(uid, `AgenX: Payment attempt → PERPLEXITY`)
         const out = await askPerplexityRaw(query, paidFetch)
         const ok = !!out?.text
         await prisma.toolRun.create({ data: { taskId, tool: 'PERPLEXITY', input: { query }, output: { ok, amount: out?.paid?.amount, currency: out?.paid?.currency }, success: ok } }).catch(()=>null)
+        if (uid) {
+          if (ok && out?.paid?.amount) await notifyDiscordForUser(uid, `AgenX: Payment success → PERPLEXITY ${out.paid.amount} ${out.paid.currency || ''}`.trim())
+          if (!ok) await notifyDiscordForUser(uid, `AgenX: Payment result → PERPLEXITY failed`)
+        }
         return { ok, text: out?.text || '' }
       } catch (e:any) {
         await prisma.toolRun.create({ data: { taskId, tool: 'PERPLEXITY', input: { query }, output: { ok: false, error: e?.message || String(e) }, success: false } }).catch(()=>null)
+        const uid = await getUserId(); if (uid) await notifyDiscordForUser(uid, `AgenX: Payment failed → PERPLEXITY :: ${(e as any)?.message || 'error'}`)
         return { ok: false, error: e?.message || 'failed' }
       }
     }
@@ -48,12 +97,19 @@ export function makeTools(taskId: string, hasUrl: boolean) {
     parameters: z.object({ query: z.string().min(2) }),
     execute: async ({ query }) => {
       try {
+        const uid = await getUserId()
+        if (uid) await notifyDiscordForUser(uid, `AgenX: Payment attempt → TAVILY`)
         const out = await askTavilyRaw(query, paidFetch)
         const ok = !!out?.text
         await prisma.toolRun.create({ data: { taskId, tool: 'TAVILY', input: { query }, output: { ok, amount: out?.paid?.amount, currency: out?.paid?.currency }, success: ok } }).catch(()=>null)
+        if (uid) {
+          if (ok && out?.paid?.amount) await notifyDiscordForUser(uid, `AgenX: Payment success → TAVILY ${out.paid.amount} ${out.paid.currency || ''}`.trim())
+          if (!ok) await notifyDiscordForUser(uid, `AgenX: Payment result → TAVILY failed`)
+        }
         return { ok, text: out?.text || '' }
       } catch (e:any) {
         await prisma.toolRun.create({ data: { taskId, tool: 'TAVILY', input: { query }, output: { ok: false, error: e?.message || String(e) }, success: false } }).catch(()=>null)
+        const uid = await getUserId(); if (uid) await notifyDiscordForUser(uid, `AgenX: Payment failed → TAVILY :: ${(e as any)?.message || 'error'}`)
         return { ok: false, error: e?.message || 'failed' }
       }
     }
@@ -65,17 +121,21 @@ export function makeTools(taskId: string, hasUrl: boolean) {
     parameters: z.object({}),
     execute: async () => {
       try {
+        const uid = await getUserId()
+        if (uid) await notifyDiscordForUser(uid, 'AgenX: Payment attempt → X402 demo')
         const res = await paidFetch('https://triton.api.corbits.dev', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getBlockHeight' }) })
         await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url: 'https://triton.api.corbits.dev', tag: 'x402_demo' }, output: { status: res.status, ok: res.ok }, success: res.ok } }).catch(()=>null)
+        if (uid) await notifyDiscordForUser(uid, `AgenX: Payment ${res.ok ? 'success' : 'result'} → X402 demo (status ${res.status})`)
         return { ok: res.ok, status: res.status }
       } catch (e:any) {
         await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url: 'https://triton.api.corbits.dev', tag: 'x402_demo' }, output: { ok: false, error: e?.message || String(e) }, success: false } }).catch(()=>null)
+        const uid = await getUserId(); if (uid) await notifyDiscordForUser(uid, `AgenX: Payment failed → X402 demo :: ${(e as any)?.message || 'error'}`)
         return { ok: false, error: (e as any)?.message || 'failed' }
       }
     }
   })
 
-  const tools = [researchPerplexity, researchTavily, x402Demo] as any[]
+  const tools = [researchPerplexity, researchTavily, x402Demo, solPaidDemo] as any[]
   if (hasUrl) tools.unshift(fetchUrlText)
   return { tools, fetchUrlText, researchPerplexity, researchTavily, x402Demo }
 }

@@ -44,10 +44,10 @@ export function makeTools(taskId: string, hasUrl: boolean) {
   const solPaidDemo = tool({
     name: 'sol_paid_call',
     description: 'Send a tiny SOL payment to the treasury (demo), then call Solana devnet RPC.',
-    parameters: z.object({ amount: z.string().optional() }),
-    execute: async ({ amount }) => {
+    parameters: z.object({}),
+    execute: async () => {
       const uid = await getUserId()
-      const amt = amount || process.env.DEMO_SOL_PER_CALL || '0.0005'
+      const amt = process.env.DEMO_SOL_PER_CALL || '0.0005'
       const to = process.env.AGENT_PUBLIC_KEY || process.env.NEXT_PUBLIC_PUBLIC_KEY || process.env.PUBLIC_KEY || ''
       try {
         if (!to) throw new Error('Treasury/recipient public key not configured')

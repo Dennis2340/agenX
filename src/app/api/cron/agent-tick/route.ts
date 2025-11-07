@@ -17,8 +17,11 @@ export async function GET(req: NextRequest) {
     const vercelCron = req.headers.get('x-vercel-cron')
     const url = new URL(req.url)
     const qp = url.searchParams.get('key')
-    if (header !== secret && qp !== secret && bearer !== secret && !vercelCron) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const onVercel = !!process.env.VERCEL
+    const authorized = (header === secret) || (qp === secret) || (bearer === secret) || !!vercelCron || onVercel
+    if (!authorized) {
+      const debug = !!process.env.DEBUG_CRON
+      return NextResponse.json(debug ? { error: 'Unauthorized', have: { header, bearer, qp, vercelCron: !!vercelCron, onVercel } } : { error: 'Unauthorized' }, { status: 401 })
     }
   }
 

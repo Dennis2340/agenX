@@ -709,8 +709,10 @@ export default function DashboardPage() {
                               <div className="text-sm text-muted-foreground">{t.description}</div>
                               <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                                 <span>Payout: {t.payoutAmount} {t.payoutCurrency}</span>
+                                {(() => { const s = computeTotalSpend(t); return <span>• Total Spend: {s.total.toFixed(4)} {s.currency}</span> })()}
                                 <Badge variant="secondary">{t.status}</Badge>
                               </div>
+                              <div className="mt-1 text-[11px] text-muted-foreground">Funded by Treasury</div>
                             </div>
                             <div className="flex gap-2">
                               <Button variant="outline" onClick={()=>setOpenDetails(s=>({ ...s, [t.id]: !s[t.id] }))}>{openDetails[t.id]? 'Hide Details' : 'View Details'}</Button>

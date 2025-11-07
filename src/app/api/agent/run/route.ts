@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '../../../../server/db'
+import { sendSol } from '../../../../server/payments/x402'
 import { z } from 'zod'
 import { notifyDiscordForUser } from '@/server/notifier'
 import { transferSol, usdToSol } from '@/server/payments/solana'
@@ -201,18 +202,6 @@ export async function POST(req: NextRequest) {
           }
         } catch (e) {
           console.error('[agent/run] payout error', { taskId, error: (e as any)?.message || String(e) })
-          await prisma.payment.create({
-            data: {
-              taskId: taskId,
-              payerUserId: task.createdById,
-              amount: (process.env.PAYOUT_SOL || process.env.PAYOUT_USD || '0'),
-              currency: 'SOL',
-              network: process.env.SOLANA_NETWORK || 'devnet',
-              status: 'FAILED',
-              txHash: null,
-            }
-          }).catch(()=>null)
-          await notifyDiscordForUser(task.createdById, `AgenX: Payment failed for "${label}".`)
         }
       } else {
         await notifyDiscordForUser(task.createdById, `AgenX: "${label}" failed.`)

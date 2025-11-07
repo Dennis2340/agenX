@@ -40,6 +40,32 @@ export function makeTools(taskId: string, hasUrl: boolean) {
     }
   })
 
+  const x402Demo = tool({
+    name: 'x402_demo_call',
+    description: 'Demonstrate a real x402-paid HTTP call to a demo endpoint.',
+    parameters: z.object({}),
+    execute: async () => {
+      try {
+        const net = process.env.SOLANA_NETWORK || 'devnet'
+        const uid = await getUserId()
+        if (net !== 'mainnet-beta') {
+          await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { tag: 'x402_demo' }, output: { ok: false, skipped: true, reason: 'x402 demo requires mainnet USDC' }, success: false } }).catch(()=>null)
+          if (uid) await notifyDiscordForUser(uid, 'AgenX: Skipping x402 demo (requires mainnet USDC).')
+          return { ok: false, skipped: true }
+        }
+        if (uid) await notifyDiscordForUser(uid, 'AgenX: Payment attempt → X402 demo')
+        const res = await paidFetch('https://triton.api.corbits.dev', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getBlockHeight' }) })
+        await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url: 'https://triton.api.corbits.dev', tag: 'x402_demo' }, output: { status: res.status, ok: res.ok }, success: res.ok } }).catch(()=>null)
+        if (uid) await notifyDiscordForUser(uid, `AgenX: Payment ${res.ok ? 'success' : 'result'} → X402 demo (status ${res.status})`)
+        return { ok: res.ok, status: res.status }
+      } catch (e:any) {
+        await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url: 'https://triton.api.corbits.dev', tag: 'x402_demo' }, output: { ok: false, error: e?.message || String(e) }, success: false } }).catch(()=>null)
+        const uid = await getUserId(); if (uid) await notifyDiscordForUser(uid, `AgenX: Payment failed → X402 demo :: ${(e as any)?.message || 'error'}`)
+        return { ok: false, error: (e as any)?.message || 'failed' }
+      }
+    }
+  })
+
   // SOL-paid demo: send a small SOL amount to treasury, then call a public devnet RPC
   const solPaidDemo = tool({
     name: 'sol_paid_call',
@@ -111,26 +137,6 @@ export function makeTools(taskId: string, hasUrl: boolean) {
         await prisma.toolRun.create({ data: { taskId, tool: 'TAVILY', input: { query }, output: { ok: false, error: e?.message || String(e) }, success: false } }).catch(()=>null)
         const uid = await getUserId(); if (uid) await notifyDiscordForUser(uid, `AgenX: Payment failed → TAVILY :: ${(e as any)?.message || 'error'}`)
         return { ok: false, error: e?.message || 'failed' }
-      }
-    }
-  })
-
-  const x402Demo = tool({
-    name: 'x402_demo_call',
-    description: 'Demonstrate a real x402-paid HTTP call to a demo endpoint.',
-    parameters: z.object({}),
-    execute: async () => {
-      try {
-        const uid = await getUserId()
-        if (uid) await notifyDiscordForUser(uid, 'AgenX: Payment attempt → X402 demo')
-        const res = await paidFetch('https://triton.api.corbits.dev', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getBlockHeight' }) })
-        await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url: 'https://triton.api.corbits.dev', tag: 'x402_demo' }, output: { status: res.status, ok: res.ok }, success: res.ok } }).catch(()=>null)
-        if (uid) await notifyDiscordForUser(uid, `AgenX: Payment ${res.ok ? 'success' : 'result'} → X402 demo (status ${res.status})`)
-        return { ok: res.ok, status: res.status }
-      } catch (e:any) {
-        await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url: 'https://triton.api.corbits.dev', tag: 'x402_demo' }, output: { ok: false, error: e?.message || String(e) }, success: false } }).catch(()=>null)
-        const uid = await getUserId(); if (uid) await notifyDiscordForUser(uid, `AgenX: Payment failed → X402 demo :: ${(e as any)?.message || 'error'}`)
-        return { ok: false, error: (e as any)?.message || 'failed' }
       }
     }
   })
@@ -289,6 +295,13 @@ export async function runTaskAgent({ taskId, instructions, sourceUrl }: { taskId
 export async function runX402DemoOnce(taskId: string) {
   const paidFetch = getPaidFetcher()
   try {
+    const net = process.env.SOLANA_NETWORK || 'devnet'
+    if (net !== 'mainnet-beta') {
+      await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { tag: 'x402_demo' }, output: { ok: false, skipped: true, reason: 'x402 demo requires mainnet USDC' }, success: false } }).catch(()=>null)
+      const t = await prisma.task.findUnique({ where: { id: taskId }, select: { createdById: true } })
+      if (t?.createdById) await notifyDiscordForUser(t.createdById, 'AgenX: Skipping x402 demo (requires mainnet USDC).')
+      return { ok: false }
+    }
     const res = await paidFetch('https://triton.api.corbits.dev', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getBlockHeight' }) })
     await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url: 'https://triton.api.corbits.dev', tag: 'x402_demo' }, output: { status: res.status, ok: res.ok }, success: res.ok } }).catch(()=>null)
     const t = await prisma.task.findUnique({ where: { id: taskId }, select: { createdById: true } })

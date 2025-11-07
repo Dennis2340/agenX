@@ -94,8 +94,13 @@ export async function POST(req: NextRequest) {
     })
     // Fire-and-forget: immediately trigger the agent to start on this task
     try {
-      const origin = (req as any)?.nextUrl?.origin || ''
-      const url = origin ? `${origin}/api/agent/run` : (process.env.PUBLIC_BASE_URL ? `${process.env.PUBLIC_BASE_URL}/api/agent/run` : '/api/agent/run')
+      const headers = req.headers
+      const xfProto = headers.get('x-forwarded-proto') || 'https'
+      const xfHost = headers.get('x-forwarded-host')
+      const vercel = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : ''
+      const pub = process.env.PUBLIC_BASE_URL || ''
+      const origin = (xfHost ? `${xfProto}://${xfHost}` : '') || vercel || pub || 'http://localhost:3000'
+      const url = `${origin}/api/agent/run`
       // do not await; avoid delaying response
       fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ taskId: task.id }) }).catch(()=>{})
     } catch {}

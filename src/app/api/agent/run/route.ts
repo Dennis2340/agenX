@@ -31,9 +31,15 @@ async function generateInstructions(task: any): Promise<string> {
     const apiKey = process.env.OPENAI_API_KEY
     if (!apiKey) throw new Error('OPENAI_API_KEY missing')
     const sys = 'You write precise system instructions for an agent that must call tools in a strict order.'
+    const steps: string[] = []
+    if (task.sourceUrl) steps.push('1) fetch_url_text({ url })')
+    steps.push(`${task.sourceUrl ? '2' : '1'}) research_perplexity`)
+    steps.push(`${task.sourceUrl ? '3' : '2'}) research_tavily`)
+    steps.push(`${task.sourceUrl ? '4' : '3'}) optional x402_demo_call`)
+    steps.push(`${task.sourceUrl ? '5' : '4'}) synthesize final answer (bullets + 1–2 lines)`) 
     const user = [
       'Write concise instructions for AgenX based on this task. Enforce this strict tool order:',
-      '1) fetch_url_text({ url }) if sourceUrl present 2) research_perplexity 3) research_tavily 4) optional x402_demo_call 5) synthesize final answer (bullets + 1–2 lines).',
+      steps.join(' '),
       'Adapt tone to task.type (SUMMARIZATION, DATA_EXTRACTION, CAPTIONS). Keep under 12 lines. No extra commentary.',
       '',
       buildPrompt(task),
@@ -66,13 +72,13 @@ function shortLabel(text: string, max = 60) {
 
 function buildDynamicInstructions(task: any) {
   const base = 'You are AgenX. Use tools in this strict order and keep answers concise.'
-  const order = [
-    '- If a sourceUrl exists, first call fetch_url_text({ url }) to ground on-page text.',
-    '- Then call research_perplexity({ query }) for concise bullets.',
-    '- Then call research_tavily({ query }) to corroborate and get links.',
-    '- Optionally call x402_demo_call() once to demonstrate paid HTTP.',
-    '- Finally, synthesize bullets + a 1–2 line summary.'
-  ].join('\n')
+  const lines: string[] = []
+  if (task.sourceUrl) lines.push('- If a sourceUrl exists, first call fetch_url_text({ url }) to ground on-page text.')
+  lines.push('- Then call research_perplexity({ query }) for concise bullets.')
+  lines.push('- Then call research_tavily({ query }) to corroborate and get links.')
+  lines.push('- Optionally call x402_demo_call() once to demonstrate paid HTTP.')
+  lines.push('- Finally, synthesize bullets + a 1–2 line summary.')
+  const order = lines.join('\n')
   let typeNote = ''
   switch (task.type) {
     case 'DATA_EXTRACTION':
@@ -129,10 +135,15 @@ export async function POST(req: NextRequest) {
     // Build dynamic instructions and run autonomous agent with tool-calling
     const inst = await generateInstructions(task)
     console.log('[agent/run] autonomous begin', { taskId, hasUrl: !!task.sourceUrl })
-    const { final: contentRaw } = await runTaskAgent({ taskId, instructions: inst })
-    console.log('[agent/run] autonomous done', { taskId, hasOutput: !!contentRaw })
-    const content = contentRaw || ''
-    // Run x402 demo once after to log spend consistently
+    let content = ''
+    try {
+      const { final: contentRaw } = await runTaskAgent({ taskId, instructions: inst, sourceUrl: task.sourceUrl })
+      console.log('[agent/run] autonomous done', { taskId, hasOutput: !!contentRaw })
+      content = contentRaw || ''
+    } catch (e:any) {
+      console.error('[agent/run] agent error (non-fatal)', { taskId, error: e?.message || String(e) })
+    }
+    // Run x402 demo once after to log spend consistently (non-fatal)
     try { await runX402DemoOnce(taskId) } catch {}
 
     const succeeded = !!content
@@ -211,6 +222,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ task: updated })
   } catch (e: any) {
     console.error('[agent/run] unhandled error', { error: e?.message || String(e) })
-    return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
+    try {
+      const body = await req.json().catch(()=>null)
+      const taskId = body?.taskId as string | undefined
+      if (taskId) await prisma.task.update({ where: { id: taskId }, data: { status: 'FAILED' } })
+    } catch {}
+    // Respond 200 to avoid breaking UI even on internal agent failure
+    return NextResponse.json({ error: 'Agent failed' }, { status: 200 })
   }
 }

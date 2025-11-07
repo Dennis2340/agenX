@@ -14,9 +14,10 @@ export function makeTools(taskId: string, hasUrl: boolean) {
     parameters: z.object({ url: z.string().url().describe('http(s) URL to fetch and extract text from') }),
     execute: async ({ url }) => {
       try {
-        const text = await fetchUrlTextRaw(url, paidFetch)
-        await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url }, output: { ok: !!text, length: text?.length || 0 }, success: !!text } }).catch(()=>null)
-        return { ok: !!text, text: text || '' }
+        const out = await fetchUrlTextRaw(url, paidFetch)
+        const ok = !!out?.text
+        await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url }, output: { ok, length: out?.text?.length || 0, amount: out?.paid?.amount, currency: out?.paid?.currency }, success: ok } }).catch(()=>null)
+        return { ok, text: out?.text || '' }
       } catch (e:any) {
         await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url }, output: { ok: false, error: e?.message || String(e) }, success: false } }).catch(()=>null)
         return { ok: false, error: e?.message || 'failed' }
@@ -31,8 +32,9 @@ export function makeTools(taskId: string, hasUrl: boolean) {
     execute: async ({ query }) => {
       try {
         const out = await askPerplexityRaw(query, paidFetch)
-        await prisma.toolRun.create({ data: { taskId, tool: 'PERPLEXITY', input: { query }, output: { ok: !!out }, success: !!out } }).catch(()=>null)
-        return { ok: !!out, text: out || '' }
+        const ok = !!out?.text
+        await prisma.toolRun.create({ data: { taskId, tool: 'PERPLEXITY', input: { query }, output: { ok, amount: out?.paid?.amount, currency: out?.paid?.currency }, success: ok } }).catch(()=>null)
+        return { ok, text: out?.text || '' }
       } catch (e:any) {
         await prisma.toolRun.create({ data: { taskId, tool: 'PERPLEXITY', input: { query }, output: { ok: false, error: e?.message || String(e) }, success: false } }).catch(()=>null)
         return { ok: false, error: e?.message || 'failed' }
@@ -47,8 +49,9 @@ export function makeTools(taskId: string, hasUrl: boolean) {
     execute: async ({ query }) => {
       try {
         const out = await askTavilyRaw(query, paidFetch)
-        await prisma.toolRun.create({ data: { taskId, tool: 'TAVILY', input: { query }, output: { ok: !!out }, success: !!out } }).catch(()=>null)
-        return { ok: !!out, text: out || '' }
+        const ok = !!out?.text
+        await prisma.toolRun.create({ data: { taskId, tool: 'TAVILY', input: { query }, output: { ok, amount: out?.paid?.amount, currency: out?.paid?.currency }, success: ok } }).catch(()=>null)
+        return { ok, text: out?.text || '' }
       } catch (e:any) {
         await prisma.toolRun.create({ data: { taskId, tool: 'TAVILY', input: { query }, output: { ok: false, error: e?.message || String(e) }, success: false } }).catch(()=>null)
         return { ok: false, error: e?.message || 'failed' }
@@ -110,9 +113,10 @@ export async function runTaskPipeline({ taskId, instructions, sourceUrl, researc
   // Helper runner fns (not using the Agents SDK tool objects directly)
   const runFetchUrlText = async (url: string) => {
     try {
-      const text = await fetchUrlTextRaw(url, paidFetch)
-      await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url }, output: { ok: !!text, length: text?.length || 0 }, success: !!text } }).catch(()=>null)
-      return { ok: !!text, text: text || '' }
+      const out = await fetchUrlTextRaw(url, paidFetch)
+      const ok = !!out?.text
+      await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url }, output: { ok, length: out?.text?.length || 0, amount: out?.paid?.amount, currency: out?.paid?.currency }, success: ok } }).catch(()=>null)
+      return { ok, text: out?.text || '' }
     } catch (e:any) {
       await prisma.toolRun.create({ data: { taskId, tool: 'DOC_PARSER', input: { url }, output: { ok: false, error: e?.message || String(e) }, success: false } }).catch(()=>null)
       throw e
@@ -121,8 +125,9 @@ export async function runTaskPipeline({ taskId, instructions, sourceUrl, researc
   const runPerplexity = async (query: string) => {
     try {
       const out = await askPerplexityRaw(query, paidFetch)
-      await prisma.toolRun.create({ data: { taskId, tool: 'PERPLEXITY', input: { query }, output: { ok: !!out }, success: !!out } }).catch(()=>null)
-      return { ok: !!out, text: out || '' }
+      const ok = !!out?.text
+      await prisma.toolRun.create({ data: { taskId, tool: 'PERPLEXITY', input: { query }, output: { ok, amount: out?.paid?.amount, currency: out?.paid?.currency }, success: ok } }).catch(()=>null)
+      return { ok, text: out?.text || '' }
     } catch (e:any) {
       await prisma.toolRun.create({ data: { taskId, tool: 'PERPLEXITY', input: { query }, output: { ok: false, error: e?.message || String(e) }, success: false } }).catch(()=>null)
       throw e
@@ -131,8 +136,9 @@ export async function runTaskPipeline({ taskId, instructions, sourceUrl, researc
   const runTavily = async (query: string) => {
     try {
       const out = await askTavilyRaw(query, paidFetch)
-      await prisma.toolRun.create({ data: { taskId, tool: 'TAVILY', input: { query }, output: { ok: !!out }, success: !!out } }).catch(()=>null)
-      return { ok: !!out, text: out || '' }
+      const ok = !!out?.text
+      await prisma.toolRun.create({ data: { taskId, tool: 'TAVILY', input: { query }, output: { ok, amount: out?.paid?.amount, currency: out?.paid?.currency }, success: ok } }).catch(()=>null)
+      return { ok, text: out?.text || '' }
     } catch (e:any) {
       await prisma.toolRun.create({ data: { taskId, tool: 'TAVILY', input: { query }, output: { ok: false, error: e?.message || String(e) }, success: false } }).catch(()=>null)
       throw e

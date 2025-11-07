@@ -53,7 +53,7 @@ export async function GET(req: NextRequest) {
   const tasks = await prisma.task.findMany({
     where: { createdById: user.id },
     orderBy: { createdAt: 'desc' },
-    include: { payments: true }
+    include: { payments: true, toolRuns: true }
   })
   return NextResponse.json({ tasks })
 }

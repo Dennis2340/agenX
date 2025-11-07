@@ -31,6 +31,7 @@ type Task = {
   resultText?: string | null
   createdAt: string
   payments?: { id: string; status: string }[]
+  toolRuns?: { id: string; output: any }[]
 }
 
 const fetcher = (url: string) => apiFetch(url)
@@ -89,6 +90,18 @@ export default function DashboardPage() {
       const url = match.startsWith('http') ? match : `https://${match}`
       return `<a href="${url}" target="_blank" rel="noreferrer" class="underline text-[#0f3d7a]">${match}</a>`
     })
+  }
+
+  function computeTotalSpend(t: Task): { total: number; currency: string } {
+    const runs = Array.isArray(t.toolRuns) ? t.toolRuns : []
+    let total = 0
+    let currency = 'USDC'
+    for (const r of runs) {
+      const amt = parseFloat(r?.output?.amount || '0')
+      if (!Number.isNaN(amt) && Number.isFinite(amt)) total += amt
+      if (r?.output?.currency) currency = String(r.output.currency)
+    }
+    return { total, currency }
   }
 
   // Try to dynamically load react-markdown + remark-gfm at runtime

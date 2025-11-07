@@ -10,19 +10,28 @@ async function postAgentRun(baseUrl: string, taskId: string) {
 }
 
 export async function GET(req: NextRequest) {
-  const secret = process.env.CRON_SECRET
+  const secret = process.env.CRON_SECRET || ''
+  const url = new URL(req.url)
+  const qp = url.searchParams.get('key')
+  const header = req.headers.get('x-cron-secret')
+  const bearer = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '')
+  const vercelCron = req.headers.get('x-vercel-cron')
+  const onVercel = !!process.env.VERCEL
+
+  let authorized = false
   if (secret) {
-    const header = req.headers.get('x-cron-secret')
-    const bearer = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '')
-    const vercelCron = req.headers.get('x-vercel-cron')
-    const url = new URL(req.url)
-    const qp = url.searchParams.get('key')
-    const onVercel = !!process.env.VERCEL
-    const authorized = (header === secret) || (qp === secret) || (bearer === secret) || !!vercelCron || onVercel
-    if (!authorized) {
-      const debug = !!process.env.DEBUG_CRON
-      return NextResponse.json(debug ? { error: 'Unauthorized', have: { header, bearer, qp, vercelCron: !!vercelCron, onVercel } } : { error: 'Unauthorized' }, { status: 401 })
-    }
+    // Simple rule when secret is set: accept query, bearer, or header
+    authorized = (qp === secret) || (bearer === secret) || (header === secret)
+  } else {
+    // No secret: allow vercel scheduled invocations
+    authorized = !!vercelCron || onVercel
+  }
+  if (!authorized) {
+    const debug = !!process.env.DEBUG_CRON
+    return NextResponse.json(
+      debug ? { error: 'Unauthorized', have: { header, bearer, qp, vercelCron: !!vercelCron, onVercel } } : { error: 'Unauthorized' },
+      { status: 401 }
+    )
   }
 
   // Find a small batch of tasks that are ready to run (including freshly posted)
@@ -33,7 +42,9 @@ export async function GET(req: NextRequest) {
     select: { id: true, status: true }
   })
 
-  const baseUrl = process.env.PUBLIC_BASE_URL || process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000'
+  const baseUrl = process.env.PUBLIC_BASE_URL
+    || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '')
+    || 'http://localhost:3000'
 
   for (const t of tasks) {
     try {
